@@ -8,12 +8,25 @@
 #                                   none -> probe-only image
 #   SHIM_CFLAGS=-DSHIM_SHOWLOG shim/build.sh "" OUT
 #                                   show the logs on UFS on screen (showlog.c)
-# Needs Homebrew llvm + lld.
+#   SHIM_CFLAGS=-DSHIM_NO_UFS shim/build.sh "" OUT
+#                                   keep the log in RAM, never write userdata
+#
+# Needs llvm + lld: Homebrew on macOS, the distro packages on Linux.
+# Other SM8150 boards can swap the boot image inputs, e.g. for vayu:
+#   MKBOOTIMG=mkbootimg DTB=path/to/stock/dtb shim/build.sh
 set -euo pipefail
 cd "$(dirname "$0")"
 ROOT=$(cd .. && pwd)
-LLVM=/opt/homebrew/opt/llvm/bin
-LLD=/opt/homebrew/opt/lld/bin
+if [ -d /opt/homebrew/opt/llvm/bin ]; then
+	LLVM=/opt/homebrew/opt/llvm/bin
+	LLD=/opt/homebrew/opt/lld/bin
+else
+	LLVM=/usr/bin
+	LLD=/usr/bin
+fi
+RECOVERY_CREATOR=$ROOT/../cepheus-zip-recovery-creator
+MKBOOTIMG=${MKBOOTIMG:-"python3 $RECOVERY_CREATOR/mkbootimg/mkbootimg.py"}
+DTB=${DTB:-$RECOVERY_CREATOR/sm8150-v2.dtb}
 CC="$LLVM/clang --target=aarch64-none-elf"
 CFLAGS="-O2 -ffreestanding -nostdlib -fno-builtin -fno-pic -fno-pie -mgeneral-regs-only -mstrict-align
 	-fno-stack-protector -fno-asynchronous-unwind-tables -Wall -Wextra ${SHIM_CFLAGS:-}"
@@ -47,11 +60,11 @@ else
 fi
 OUT=${2:-out/shim-boot.img}
 # Cepheus uses header version 0, kernel offset 4096, base 0.
-# DTB included from cepheus-zip-recovery-creator/sm8150-v2.dtb
-PYTHONPATH="$ROOT/../cepheus-zip-recovery-creator/mkbootimg" python3 "$ROOT/../cepheus-zip-recovery-creator/mkbootimg/mkbootimg.py" \
+# DTB defaults to cepheus-zip-recovery-creator/sm8150-v2.dtb (see DTB above).
+PYTHONPATH="$RECOVERY_CREATOR/mkbootimg" $MKBOOTIMG \
 	--kernel out/Image.uncompressed --ramdisk out/ramdisk.bin \
 	--base 0 --kernel_offset 0x8000 --ramdisk_offset 0x1000000 --tags_offset 0x100 \
-	--dtb "$ROOT/../cepheus-zip-recovery-creator/sm8150-v2.dtb" --dtb_offset 0x0000000001f00000 \
+	--dtb "$DTB" --dtb_offset 0x0000000001f00000 \
 	--pagesize 4096 --os_version 11.0.0 --os_patch_level 2021-10 --header_version 2 \
 	--cmdline "debug=0xc serial=3 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1 cepheuswdt=0 cepheusreboot=600" -o "$OUT"
 # Xiaomi's ABL requires an AVB footer (like stock boot.img).
