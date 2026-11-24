@@ -832,9 +832,12 @@ void shim_main(uintptr_t dtb)
 	}
 	reset();
 #endif
+#ifndef SHIM_NO_UFS
 	ufs_ok = !ufs_init();
 	if (ufs_ok)
 		ramlog_rescue();
+#endif
+	/* With -DSHIM_NO_UFS, ufs_ok stays 0 and every save_log() is a no-op. */
 #if SHIM_FTS_TLMM_ALL
 	/*
 	 * Run the full-pad dump only after UFS is up so a fault or hang leaves
