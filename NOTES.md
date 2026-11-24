@@ -642,6 +642,16 @@ Of the ~81 original ios-sweet kernel patches:
 
 - ... (one line per patch, filled in as they are created)
 
+## Vayu patches (Poco X3 Pro, SM8150-AC)
+
+Patches from 0162 on retarget this tree at vayu; plan and board facts live in
+github.com/pruefsumme/vayu-UniXNU (`PORTING.md`).
+
+- 0162 panel size 1080x2400 (ABL scanout read with the probe shim): one
+  `SWEET_PANEL_W/H` in `SweetDisplayMask.h` for the GPU present path and touch,
+  `SWEET_EARLY_FB_HEIGHT` 2400. GPU stage still fits the pool (0xff6000 of
+  0x1000000 at pitch 4352). Not built yet (needs the Actions macOS runner).
+
 ## Step 1 resolved (2026-11-05)
 
 Keys and touch TBD items from the initial port plan are now resolved:

@@ -1,0 +1,69 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index 8963118..1320b8f 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -545,8 +545,8 @@ present_wait_locked(uint32_t k, const char *why)
+ 	}
+ 	return 0;
+ }
+-#define PANEL_W         1080
+-#define PANEL_H         2340
++#define PANEL_W         SWEET_PANEL_W
++#define PANEL_H         SWEET_PANEL_H
+ #define DISPLAY_MASK_OFF        0x500000ULL     /* 2x2 corner mattes, one per corner */
+ #define DISPLAY_MASK_SIDE       256u
+ #define DISPLAY_MASK_DIM        (DISPLAY_MASK_SIDE * 2)
+diff --git a/iokit/Kernel/arm/SweetDisplayMask.h b/iokit/Kernel/arm/SweetDisplayMask.h
+index 172245d..ae38fd5 100644
+--- a/iokit/Kernel/arm/SweetDisplayMask.h
++++ b/iokit/Kernel/arm/SweetDisplayMask.h
+@@ -16,6 +16,14 @@
+ 
+ #include <stdint.h>
+ 
++/*
++ * Panel size in pixels, shared by the GPU present path and touch. vayu (Poco
++ * X3 Pro): 1080x2400 video-mode LCD, read from ABL's scanout with the probe
++ * shim. cepheus was 1080x2340.
++ */
++#define SWEET_PANEL_W 1080
++#define SWEET_PANEL_H 2400
++
+ #define SWEET_DISPLAY_CORNER_DEFAULT 110u
+ #define SWEET_DISPLAY_CORNER_MAX     160u       /* extent 245: fits the GPU's 256-px tiles */
+ #define SWEET_CORNER_STEPS           32u        /* lines per cubic */
+diff --git a/iokit/Kernel/arm/hid/SweetHID.cpp b/iokit/Kernel/arm/hid/SweetHID.cpp
+index 96d1ad5..aef6bd2 100644
+--- a/iokit/Kernel/arm/hid/SweetHID.cpp
++++ b/iokit/Kernel/arm/hid/SweetHID.cpp
+@@ -359,9 +359,7 @@ OSDefineMetaClassAndStructors(SweetHIDButtons, IOHIDEventService);
+ #define SWEET_TOUCH_EDGE_PX 48
+ extern "C" int sweet_display_fit_x, sweet_display_fit_y, sweet_display_fit_w, sweet_display_fit_h;
+ 
+-/* Touch reports panel pixels; cepheus's panel is 1080x2340 (live FDT). */
+-#define SWEET_PANEL_W 1080
+-#define SWEET_PANEL_H 2340
++/* Touch reports panel pixels (SWEET_PANEL_W x SWEET_PANEL_H, SweetDisplayMask.h). */
+ class SweetHIDTouch : public IOHIDEventService {
+ 	OSDeclareDefaultStructors(SweetHIDTouch);
+ public:
+diff --git a/pexpert/pexpert/arm64/SWEET.h b/pexpert/pexpert/arm64/SWEET.h
+index a85044c..aac68de 100644
+--- a/pexpert/pexpert/arm64/SWEET.h
++++ b/pexpert/pexpert/arm64/SWEET.h
+@@ -60,12 +60,14 @@
+  * 0x9c000000/0x2400000, FB at 0x9c000000, stride 4320 (1080 * 4). (flame's
+  * FB sits at 0x9c400000; the cepheus port had copied that and the panel
+  * showed the frame shifted down by 4 MB.)
++ * vayu (Poco X3 Pro): same base and stride, 1080x2400 (video-mode LCD, read
++ * from the VIG/DMA source registers with the probe shim, 2026-11-24).
+  * SWEET_EARLY_FB_BLOCK_PA is the 32MB L2 block holding it.
+  */
+ #define SWEET_EARLY_FB_PA         0x9c000000
+ #define SWEET_EARLY_FB_BLOCK_PA   0x9c000000
+ #define SWEET_EARLY_FB_WIDTH      1080
+-#define SWEET_EARLY_FB_HEIGHT     2340
++#define SWEET_EARLY_FB_HEIGHT     2400    /* vayu; cepheus was 2340 */
+ #define SWEET_EARLY_FB_STRIDE     4320
+ 
+ #define GIC_SPURIOUS_IRQ          1023    // IRQ no. for GIC spurious interrupt
