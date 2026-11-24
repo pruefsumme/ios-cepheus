@@ -660,7 +660,9 @@ github.com/pruefsumme/vayu-UniXNU (`PORTING.md`).
   is flashless) with the boot loader's CRC check, then reports read every 8 ms
   (shortcut: INT 122 not used yet). Firmware parsing is in `vayu_nvt_fw.h`,
   tested on the host by vayu-UniXNU `tools/test-nvt-fw.c`. Boot-args
-  `vayutouch=0`, `vayutouchfw=2` (CSOT), `vayutouchlog=1`.
+  `vayutouch=0`, `vayutouchfw=2` (CSOT), `vayutouchlog=1`. Built by CI run
+  45465728188 and booted on vayu 2026-11-24: touch works on the lock screen
+  (tap and swipe) on the first boot.
 
 ## Step 1 resolved (2026-11-05)
 
