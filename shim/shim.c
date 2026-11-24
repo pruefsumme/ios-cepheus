@@ -905,16 +905,17 @@ void shim_main(uintptr_t dtb)
 		fb = FB_SPLASH_BASE;
 	if (!stride)
 		stride = FB_W * 4;
-	log_printf("fb: base %lx stride %u (%s)\n", (uint64_t)fb, stride,
+	/* Panel size from the same pipe (SSPP_SRC_SIZE), so XNU gets vayu's 2400 lines too. */
+	uint32_t src_size = sde.pipe ? rd32(sde.pipe) : 0;
+	uint32_t fb_w = src_size & 0xffff ? src_size & 0xffff : FB_W;
+	uint32_t fb_h = src_size >> 16 ? src_size >> 16 : FB_H;
+	log_printf("fb: base %lx stride %u size %ux%u (%s)\n", (uint64_t)fb, stride, fb_w, fb_h,
 		   sde.pipe ? "live pipe" : "fallback");
 	if (!con_init(fb, stride)) {
 		con_clear(0xff203040);
 		con_str("CEPHEUS", "shim probe v1");
 		/* The scanout geometry ABL left, for boards brought up without a UFS log. */
-		if (sde.pipe) {
-			uint32_t size = rd32(sde.pipe);	/* SSPP_SRC_SIZE */
-			con_hex2("src", "w", size & 0xffff, "h", size >> 16);
-		}
+		con_hex2("src", "w", fb_w, "h", fb_h);
 		con_hex2("fb", "base", (uint32_t)fb, "stride", stride);
 	}
 	sde_autorefresh(1);
@@ -946,7 +947,7 @@ void shim_main(uintptr_t dtb)
 	save_log("prepower");
 #endif
 	/* An XNU payload in the ramdisk means: boot it. */
-	struct loader_fb lfb = { fb, stride, FB_W, FB_H, save_before_jump };
+	struct loader_fb lfb = { fb, stride, fb_w, fb_h, save_before_jump };
 	if (loader_has_payload(dtb) && 0)
 		wdt_arm(120);
 	const char *why = loader_boot(dtb, &lfb);
