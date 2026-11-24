@@ -910,10 +910,19 @@ void shim_main(uintptr_t dtb)
 	if (!con_init(fb, stride)) {
 		con_clear(0xff203040);
 		con_str("CEPHEUS", "shim probe v1");
+		/* The scanout geometry ABL left, for boards brought up without a UFS log. */
+		if (sde.pipe) {
+			uint32_t size = rd32(sde.pipe);	/* SSPP_SRC_SIZE */
+			con_hex2("src", "w", size & 0xffff, "h", size >> 16);
+		}
+		con_hex2("fb", "base", (uint32_t)fb, "stride", stride);
 	}
 	sde_autorefresh(1);
 	sde_sample("autorefresh", 16, 20);
 	save_log("display");
+#ifdef SHIM_NO_UFS
+	delay_ms(10000);	/* the screen is the only output: leave time to read it */
+#endif
 #ifdef SHIM_FTS_TEST
 	/* -DSHIM_FTS_LATE_TOUCH_MS: visible touch window, second bring-up. */
 	fts_touch_window();
