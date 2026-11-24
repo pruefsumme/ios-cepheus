@@ -32,10 +32,10 @@ index fb50efd..a677c2b 100644
  }
 diff --git a/bsd/dev/vayu_nvt.c b/bsd/dev/vayu_nvt.c
 new file mode 100644
-index 0000000..0289d85
+index 0000000..bdc4c71
 --- /dev/null
 +++ b/bsd/dev/vayu_nvt.c
-@@ -0,0 +1,522 @@
+@@ -0,0 +1,525 @@
 +/*
 + * vayu touch: Novatek NT36672C (touch inside the panel's display driver IC,
 + * TDDI) on SPI, panel 1080x2400.
@@ -193,11 +193,13 @@ index 0000000..0289d85
 +static void
 +nvt_gpio(vm_offset_t base, unsigned pin, unsigned pull, bool out, bool high)
 +{
++	uint32_t cfg;
++
 +	if (out) {
 +		/* Set the output latch before enabling the output, avoiding a glitch. */
 +		nvt_wr32(base, NVT_GPIO_IO(pin), high ? 2u : 0u);
 +	}
-+	uint32_t cfg = nvt_rd32(base, NVT_GPIO_CFG(pin)) & ~0x3ffu;
++	cfg = nvt_rd32(base, NVT_GPIO_CFG(pin)) & ~0x3ffu;
 +	cfg |= pull | (NVT_DRIVE_8MA << 6) | (out ? 0x200u : 0u);
 +	nvt_wr32(base, NVT_GPIO_CFG(pin), cfg);
 +}
@@ -433,11 +435,10 @@ index 0000000..0289d85
 +	/* Heartbeats (0x77), palm and gesture packets have ids above 10 and drop out here. */
 +	for (unsigned slot = 0; slot < NVT_FINGERS; slot++) {
 +		const uint8_t *r = d + slot * 6;
-+		unsigned id = r[0] >> 3, status = r[0] & 7;
++		unsigned id = r[0] >> 3, status = r[0] & 7, f = id - 1;
 +		if (id < 1 || id > NVT_FINGERS || (status != 1 && status != 2)) {
 +			continue;
 +		}
-+		unsigned f = id - 1;
 +		nvt.x[f] = nvt_clamp(r[1] << 4 | r[3] >> 4, NVT_PANEL_W - 1);
 +		nvt.y[f] = nvt_clamp(r[2] << 4 | (r[3] & 0x0f), NVT_PANEL_H - 1);
 +		nvt.down[f] = seen[f] = true;
@@ -491,22 +492,24 @@ index 0000000..0289d85
 +nvt_thread(__unused void *arg, __unused wait_result_t wr)
 +{
 +	static struct nvt_part parts[NVT_MAX_PARTS];
-+	int which = 1;
++	const char *name;
++	const uint8_t *fw;
++	uint64_t size = 0;
++	int which = 1, nparts, bad;
++
 +	PE_parse_boot_argn("vayutouchfw", &which, sizeof(which));
-+	const char *name = which == 2 ? "j20s_novatek_ts_fw02.bin" : "j20s_novatek_ts_fw01.bin";
++	name = which == 2 ? "j20s_novatek_ts_fw02.bin" : "j20s_novatek_ts_fw01.bin";
 +
 +	/* The firmware lives on the iOS root (a minute at most). */
 +	for (unsigned waited = 0; waited < 300 && rootvnode == NULLVP; waited++) {
 +		nvt_msleep(200);
 +	}
-+	uint64_t size = 0;
-+	const uint8_t *fw = hakios_adsp_fw_file(name, &size);
++	fw = hakios_adsp_fw_file(name, &size);
 +	if (fw == NULL) {
 +		printf("VAYU NVT: /fw/%s not found on the root\n", name);
 +		return;
 +	}
-+	int bad;
-+	int nparts = nvt_parse_firmware(fw, size, parts, &bad);
++	nparts = nvt_parse_firmware(fw, size, parts, &bad);
 +	if (nparts < 2) {
 +		printf("VAYU NVT: %s is not a usable Novatek firmware (error %d, part %d)\n", name, nparts, bad);
 +		hakios_adsp_fw_free(fw, size);
@@ -560,10 +563,10 @@ index 0000000..0289d85
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 diff --git a/bsd/dev/vayu_nvt_fw.h b/bsd/dev/vayu_nvt_fw.h
 new file mode 100644
-index 0000000..b7994d4
+index 0000000..dfc6ada
 --- /dev/null
 +++ b/bsd/dev/vayu_nvt_fw.h
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,95 @@
 +/*
 + * Novatek NT36672C firmware file parsing, shared by bsd/dev/vayu_nvt.c and
 + * the host test in vayu-UniXNU (tools/test-nvt-fw.c). Plain C, no kernel
@@ -623,6 +626,8 @@ index 0000000..b7994d4
 +static inline int
 +nvt_parse_firmware(const uint8_t *fw, uint64_t size, struct nvt_part *parts, int *bad)
 +{
++	int n = 0;
++
 +	*bad = -1;
 +	if (size < 0x100 || nvt_le32(fw) < 0x30 || nvt_le32(fw) > size) {
 +		return NVT_FW_BAD_HEADER;
@@ -630,7 +635,6 @@ index 0000000..b7994d4
 +	if (fw[0x28] & 0x10) {
 +		return NVT_FW_OVERLAYS;
 +	}
-+	int n = 0;
 +	parts[n++] = (struct nvt_part){ nvt_le32(fw + 0x04), nvt_le32(fw + 0x08), nvt_le32(fw + 0x00), nvt_le32(fw + 0x18) };
 +	parts[n++] = (struct nvt_part){ nvt_le32(fw + 0x10), nvt_le32(fw + 0x14), nvt_le32(fw + 0x0c), nvt_le32(fw + 0x1c) };
 +	for (uint32_t off = 0x30; off + 16 <= nvt_le32(fw) && n < (int)NVT_MAX_PARTS; off += 16) {
@@ -641,12 +645,14 @@ index 0000000..b7994d4
 +	}
 +	for (int i = 0; i < n; i++) {
 +		uint64_t len = (uint64_t)parts[i].size + 1;
++		uint32_t crc;
++
 +		if (parts[i].bin + len > size) {
 +			*bad = i;
 +			return NVT_FW_PAST_END;
 +		}
 +		/* The header section's CRC covers the header without its own CRC word. */
-+		uint32_t crc = parts[i].bin == 0 ? nvt_crc32(fw, (size_t)len - 4) : nvt_crc32(fw + parts[i].bin, (size_t)len);
++		crc = parts[i].bin == 0 ? nvt_crc32(fw, (size_t)len - 4) : nvt_crc32(fw + parts[i].bin, (size_t)len);
 +		if (crc != parts[i].crc) {
 +			*bad = i;
 +			return NVT_FW_BAD_CRC;
