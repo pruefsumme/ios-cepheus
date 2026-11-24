@@ -650,7 +650,10 @@ github.com/pruefsumme/vayu-UniXNU (`PORTING.md`).
 - 0162 panel size 1080x2400 (ABL scanout read with the probe shim): one
   `SWEET_PANEL_W/H` in `SweetDisplayMask.h` for the GPU present path and touch,
   `SWEET_EARLY_FB_HEIGHT` 2400. GPU stage still fits the pool (0xff6000 of
-  0x1000000 at pitch 4352). Not built yet (needs the Actions macOS runner).
+  0x1000000 at pitch 4352). Built by CI run 45447981227 and booted on vayu
+  2026-11-24 (ADT `mkadt.py --highmem --amp --vayu`, read-only args with
+  `cepheustouch=0 sweetbl=0`): the log scrolled on screen to `mount(9) failed`,
+  as expected with Android's f2fs still in userdata.
 
 ## Step 1 resolved (2026-11-05)
 
