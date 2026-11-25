@@ -1305,7 +1305,7 @@ static char sweetMemoryOwnerKey;
  // size its redraw context: zero makes it redraw a 1x1 transparent image at 0x0
  // and assert in PXGCreateContext. 16384 is the runtime's measured 2D limit
  // (private_properties.rs, MaxTextureWidth2D/Height2D).
- uint32_t *limits = (uint32_t *)((char *)self + 8);
+ uint32_t *limits = (uint32_t *)((char *)(__bridge void *)self + 8);
  limits[0x84 / 4] = 16384;
  limits[0x88 / 4] = 16384;
 }
