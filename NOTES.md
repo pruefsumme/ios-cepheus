@@ -660,7 +660,11 @@ github.com/pruefsumme/vayu-UniXNU (`PORTING.md`).
   is flashless) with the boot loader's CRC check, then a report read on every
   INT 122 rising edge, latched by the TLMM (raw status on, not routed to the
   GIC) and checked every 2 ms; a fallback read every 50 ms while a finger is
-  down and every 1 s otherwise. `vayutouchpoll=1` restores plain 8 ms polling. Firmware parsing is in `vayu_nvt_fw.h`,
+  down and every 1 s otherwise. `vayutouchpoll=1` restores plain 8 ms polling.
+- 0164 `sweetfb_fade=0`: on display off (`RequestPowerChange(0)`) write black
+  once instead of the 7-step halving fade. The fade rewrites the whole 10 MB
+  panel buffer per step on the CPU, which an AMOLED hides (black is off) but
+  vayu's LCD shows as black bands creeping over the screen. Default stays 1. Firmware parsing is in `vayu_nvt_fw.h`,
   tested on the host by vayu-UniXNU `tools/test-nvt-fw.c`. Boot-args
   `vayutouch=0`, `vayutouchfw=2` (CSOT), `vayutouchlog=1`. Built by CI run
   45465728188 and booted on vayu 2026-11-24: touch works on the lock screen
