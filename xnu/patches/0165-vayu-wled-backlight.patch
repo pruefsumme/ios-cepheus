@@ -1,8 +1,8 @@
 diff --git a/bsd/dev/sweet_spmi.c b/bsd/dev/sweet_spmi.c
-index d97eb8a..e41ed5c 100644
+index d97eb8a..8b8cf1e 100644
 --- a/bsd/dev/sweet_spmi.c
 +++ b/bsd/dev/sweet_spmi.c
-@@ -7,6 +7,11 @@
+@@ -7,21 +7,30 @@
   * Also the PM8150 RTC (peripheral 0x60) for the time of day
   * (SweetPlatformExpert.cpp) and the PM8150B (USID 2) FG-gen4/charger
   * registers for the cepheus battery backend (SweetBattery.cpp).
@@ -14,7 +14,17 @@ index d97eb8a..e41ed5c 100644
   */
  #if defined(ARM64_BOARD_CONFIG_SWEET)
  #include <sys/param.h>
-@@ -22,6 +27,8 @@ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ #include <sys/systm.h>
+ #include <machine/machine_routines.h>
+ #include <IOKit/IOLocks.h>
++#include <vm/memory_types.h>         /* VM_WIMG_IO */
+ #include "sweet_spmi.h"
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++extern vm_offset_t ml_io_map_unmappable(vm_offset_t, vm_size_t, unsigned int);
+ 
+ #define SP_CORE_PA 0x0c440000u
+ #define SP_OBS_PA  0x0e600000u
  #define SP_CFG_PA  0x0c40a000u
  #define SP_NO_APID 0xffffu
  #define SP_USID_PM8150B 2u
@@ -23,7 +33,7 @@ index d97eb8a..e41ed5c 100644
  
  static vm_offset_t sp_core, sp_obs, sp_cfg;
  static IOLock *sp_lock;
-@@ -29,6 +36,13 @@ static unsigned sp_count;
+@@ -29,6 +38,13 @@ static unsigned sp_count;
  static bool sp_attempted, sp_ready;
  /* A timed-out command may complete late: never reuse that lane this boot. */
  static bool sp_poisoned[512];
@@ -37,7 +47,7 @@ index d97eb8a..e41ed5c 100644
  
  static uint32_t
  sp_rd(vm_offset_t base, unsigned off)
-@@ -108,7 +122,7 @@ sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out)
+@@ -108,7 +124,7 @@ sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out)
  		    peripheral == 0x40 || peripheral == 0x41)) {
  			return -1;
  		}
@@ -46,7 +56,7 @@ index d97eb8a..e41ed5c 100644
  		return -1;
  	}
  	IOLockLock(sp_lock);
-@@ -141,4 +155,45 @@ sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out)
+@@ -141,4 +157,46 @@ sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out)
  	IOLockUnlock(sp_lock);
  	return -1;
  }
@@ -66,7 +76,8 @@ index d97eb8a..e41ed5c 100644
 +		return -1;
 +	}
 +	if (!sp_chnl[apid]) {
-+		sp_chnl[apid] = ml_io_map(SP_CHNLS_PA + 0x10000u * apid, 0x1000);
++		/* kernel_map, not the small io_submap ml_io_map uses (NOTES.md, 0160) */
++		sp_chnl[apid] = ml_io_map_unmappable(SP_CHNLS_PA + 0x10000u * apid, 0x1000, VM_WIMG_IO);
 +	}
 +	vm_offset_t ch = sp_chnl[apid];
 +	if (!ch) {

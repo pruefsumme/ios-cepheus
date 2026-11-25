@@ -677,7 +677,12 @@ github.com/pruefsumme/vayu-UniXNU (`PORTING.md`).
   kernel's only PMIC write: WLED peripherals only, and only if the apps EE
   owns them. Current and OVP settings stay as ABL left them.
 - Battery: the cepheus PM8150B FG-gen4 backend works unchanged on vayu (same
-  PMIC): 27%, 3806 mV, charging, read at boot. Firmware parsing is in `vayu_nvt_fw.h`,
+  PMIC): 27%, 3806 mV, charging, read at boot.
+- 0165 fix: the WLED write channel is mapped with `ml_io_map_unmappable`
+  (kernel_map), not `ml_io_map` (the io_submap that ran out in 0160).
+- 0166 battery design capacity 5160 mAh (vayu DT `nom-batt-capacity-mah`,
+  "J20S_nvt_5160mah"; cepheus had 3300). Temperature is still the 25 C
+  fallback; ios-vayu reads it from the RRADC (0x4288/0x4289). Firmware parsing is in `vayu_nvt_fw.h`,
   tested on the host by vayu-UniXNU `tools/test-nvt-fw.c`. Boot-args
   `vayutouch=0`, `vayutouchfw=2` (CSOT), `vayutouchlog=1`. Built by CI run
   45465728188 and booted on vayu 2026-11-24: touch works on the lock screen

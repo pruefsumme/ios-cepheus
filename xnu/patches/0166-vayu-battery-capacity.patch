@@ -1,0 +1,15 @@
+diff --git a/iokit/Kernel/arm/SweetBattery.cpp b/iokit/Kernel/arm/SweetBattery.cpp
+index 72975bd..2ab3d8b 100644
+--- a/iokit/Kernel/arm/SweetBattery.cpp
++++ b/iokit/Kernel/arm/SweetBattery.cpp
+@@ -549,8 +549,8 @@ SweetBattery::start(IOService *provider)
+ 	if (spmi && wantCepheus && probeCepheus()) {
+ 		fCepheus = true;
+ 		fReal = true;
+-		/* cepheus packs a 3300 mAh cell (batterydata-F1-*-3300mah). */
+-		fDesignMah = 3300;
++		/* vayu: 5160 mAh (DT qcom,nom-batt-capacity-mah, "J20S_nvt_5160mah"); cepheus had 3300. */
++		fDesignMah = 5160;
+ 	} else {
+ 		if (spmi && wantCepheus) {
+ 			IOLog("SWEET BATTERY: PM8150B FG-gen4 probe failed\n");
