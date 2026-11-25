@@ -664,7 +664,11 @@ github.com/pruefsumme/vayu-UniXNU (`PORTING.md`).
 - 0164 `sweetfb_fade=0`: on display off (`RequestPowerChange(0)`) write black
   once instead of the 7-step halving fade. The fade rewrites the whole 10 MB
   panel buffer per step on the CPU, which an AMOLED hides (black is off) but
-  vayu's LCD shows as black bands creeping over the screen. Default stays 1. Firmware parsing is in `vayu_nvt_fw.h`,
+  vayu's LCD shows as black bands creeping over the screen. Default stays 1.
+  Before the black write it waits for queued GPU presents
+  (`sweet_gpu_present_idle`): a present landing afterwards repainted the top
+  ~170 rows (its corner band is written last), seen on vayu as the top of the
+  lock screen staying visible. Firmware parsing is in `vayu_nvt_fw.h`,
   tested on the host by vayu-UniXNU `tools/test-nvt-fw.c`. Boot-args
   `vayutouch=0`, `vayutouchfw=2` (CSOT), `vayutouchlog=1`. Built by CI run
   45465728188 and booted on vayu 2026-11-24: touch works on the lock screen
