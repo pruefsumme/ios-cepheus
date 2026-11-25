@@ -32,10 +32,10 @@ index fb50efd..a677c2b 100644
  }
 diff --git a/bsd/dev/vayu_nvt.c b/bsd/dev/vayu_nvt.c
 new file mode 100644
-index 0000000..bdc4c71
+index 0000000..35b212a
 --- /dev/null
 +++ b/bsd/dev/vayu_nvt.c
-@@ -0,0 +1,525 @@
+@@ -0,0 +1,602 @@
 +/*
 + * vayu touch: Novatek NT36672C (touch inside the panel's display driver IC,
 + * TDDI) on SPI, panel 1080x2400.
@@ -67,8 +67,14 @@ index 0000000..bdc4c71
 + * the thread waits for the root first. Tianma panels (maker 0x36, this
 + * unit) use j20s_novatek_ts_fw01.bin, CSOT (0x42) j20s_novatek_ts_fw02.bin.
 + *
++ * Reports are read when the chip pulses INT (GPIO 122, rising edge). The
++ * edge is latched by the TLMM itself (raw status on, routing to the GIC
++ * off), and the thread checks that one register every 2 ms, so the slow
++ * bit-banged read only happens when there is a new frame.
++ *
 + * Boot-args: vayutouch=0 off, vayutouchfw=2 use the CSOT firmware,
-+ * vayutouchlog=1 log every report with a finger in it.
++ * vayutouchlog=1 log every report with a finger in it, vayutouchpoll=1
++ * ignore INT and read every 8 ms (the first driver's behaviour).
 + */
 +#if defined(ARM64_BOARD_CONFIG_SWEET)
 +#include <sys/param.h>
@@ -98,6 +104,8 @@ index 0000000..bdc4c71
 +#define NVT_TLMM_SIZE     0x81000u
 +#define NVT_GPIO_CFG(n)   ((uint32_t)(n) * 0x1000u)
 +#define NVT_GPIO_IO(n)    (NVT_GPIO_CFG(n) + 4u)
++#define NVT_GPIO_INTR_CFG(n)    (NVT_GPIO_CFG(n) + 8u)
++#define NVT_GPIO_INTR_STATUS(n) (NVT_GPIO_CFG(n) + 0xcu)
 +#define NVT_PIN_MISO      55
 +#define NVT_PIN_MOSI      56
 +#define NVT_PIN_SCLK      57
@@ -109,6 +117,18 @@ index 0000000..bdc4c71
 +#define NVT_PULL_NONE     0u
 +#define NVT_PULL_DOWN     1u
 +#define NVT_DRIVE_8MA     3u
++
++/*
++ * TLMM interrupt config (SM8150, from mainline pinctrl-sm8150.c/pinctrl-msm.c):
++ * [0] route to the GIC, [1] polarity, [3:2] detection (1 = edge), [4] raw
++ * status (latch even while not routed), [7:5] target. Status bit 0, cleared
++ * by writing 0.
++ */
++#define NVT_INTR_ENABLE       (1u << 0)
++#define NVT_INTR_POL_HIGH     (1u << 1)
++#define NVT_INTR_DETECT_MASK  (3u << 2)
++#define NVT_INTR_DETECT_EDGE  (1u << 2)
++#define NVT_INTR_RAW_STATUS   (1u << 4)
 +
 +/* Chip registers (NT36672C uses Novatek's "NT36675" memory map). */
 +#define NVT_ENG_RST       0x7fff80u
@@ -138,7 +158,10 @@ index 0000000..bdc4c71
 +#define NVT_PANEL_W       1080
 +#define NVT_PANEL_H       2400
 +#define NVT_CHUNK         4096u         /* firmware bytes per SPI frame */
-+#define NVT_POLL_MS       8u            /* shortcut: polls instead of the INT edge, see nvt_run() */
++#define NVT_POLL_MS       8u            /* vayutouchpoll=1: read every 8 ms */
++#define NVT_INT_CHECK_MS  2u            /* how often the latched INT edge is checked */
++#define NVT_HELD_READ_MS  50u           /* while a finger is down, read at least this often */
++#define NVT_IDLE_READ_MS  1000u         /* and once a second anyway, to notice firmware crashes */
 +
 +/* mach_absolute_time() runs at 19.2 MHz on SM8150. */
 +#define NVT_TICKS_PER_US  19u
@@ -146,7 +169,7 @@ index 0000000..bdc4c71
 +static struct {
 +	vm_offset_t south, north;
 +	bool started;
-+	int log;
++	int log, poll;
 +	bool down[NVT_FINGERS];
 +	int x[NVT_FINGERS], y[NVT_FINGERS];
 +} nvt;
@@ -460,16 +483,68 @@ index 0000000..bdc4c71
 +}
 +
 +/*
-+ * shortcut: the report is read every NVT_POLL_MS instead of on the INT
-+ * rising edge. A report re-read without a new frame repeats the same state,
-+ * so this is correct, just costs CPU (~1.5 ms of bit-banging per read).
-+ * Upgrade to the TLMM interrupt latch for GPIO 122 once touch works.
++ * Latch rising edges of INT in the TLMM without routing them to the GIC.
++ * Turning raw status on can latch one spurious edge, so clear it after.
++ */
++static void
++nvt_int_latch_setup(void)
++{
++	uint32_t cfg = nvt_rd32(nvt.south, NVT_GPIO_INTR_CFG(NVT_PIN_INT));
++
++	cfg &= ~(NVT_INTR_ENABLE | NVT_INTR_POL_HIGH | NVT_INTR_DETECT_MASK);
++	cfg |= NVT_INTR_RAW_STATUS | NVT_INTR_DETECT_EDGE | NVT_INTR_POL_HIGH;
++	nvt_wr32(nvt.south, NVT_GPIO_INTR_CFG(NVT_PIN_INT), cfg);
++	nvt_wr32(nvt.south, NVT_GPIO_INTR_STATUS(NVT_PIN_INT), 0);
++	printf("VAYU NVT: INT edge latch on GPIO %u (intr cfg %x)\n", NVT_PIN_INT,
++	    nvt_rd32(nvt.south, NVT_GPIO_INTR_CFG(NVT_PIN_INT)));
++}
++
++/* True once per latched INT edge. */
++static bool
++nvt_int_pending(void)
++{
++	if (!(nvt_rd32(nvt.south, NVT_GPIO_INTR_STATUS(NVT_PIN_INT)) & 1u)) {
++		return false;
++	}
++	nvt_wr32(nvt.south, NVT_GPIO_INTR_STATUS(NVT_PIN_INT), 0);
++	return true;
++}
++
++static bool
++nvt_any_down(void)
++{
++	for (unsigned f = 0; f < NVT_FINGERS; f++) {
++		if (nvt.down[f]) {
++			return true;
++		}
++	}
++	return false;
++}
++
++/*
++ * Read a report on every INT edge. Without one, still read every 50 ms
++ * while a finger is down (a missed edge must not leave a finger stuck) and
++ * once a second otherwise (crash frames come without touches).
 + */
 +static void
 +nvt_run(const uint8_t *fw, const struct nvt_part *parts, int nparts)
 +{
-+	unsigned crash_frames = 0;
++	unsigned crash_frames = 0, since_read = 0;
++
++	if (!nvt.poll) {
++		nvt_int_latch_setup();
++	}
 +	for (;;) {
++		unsigned wait = nvt.poll ? NVT_POLL_MS : NVT_INT_CHECK_MS;
++		bool due = nvt.poll || nvt_int_pending() ||
++		    since_read >= (nvt_any_down() ? NVT_HELD_READ_MS : NVT_IDLE_READ_MS);
++
++		if (!due) {
++			nvt_msleep(wait);
++			since_read += wait;
++			continue;
++		}
++		since_read = 0;
 +		if (nvt_report()) {
 +			/* More than 10 crash frames in a row: the firmware reset itself, load it again. */
 +			if (++crash_frames > 10) {
@@ -482,7 +557,8 @@ index 0000000..bdc4c71
 +		} else {
 +			crash_frames = 0;
 +		}
-+		nvt_msleep(NVT_POLL_MS);
++		nvt_msleep(wait);
++		since_read += wait;
 +	}
 +}
 +
@@ -544,6 +620,7 @@ index 0000000..bdc4c71
 +	nvt.started = true;
 +	PE_parse_boot_argn("vayutouch", &enabled, sizeof(enabled));
 +	PE_parse_boot_argn("vayutouchlog", &nvt.log, sizeof(nvt.log));
++	PE_parse_boot_argn("vayutouchpoll", &nvt.poll, sizeof(nvt.poll));
 +	if (!enabled) {
 +		printf("VAYU NVT: disabled (vayutouch=0)\n");
 +		return;

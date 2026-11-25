@@ -657,8 +657,10 @@ github.com/pruefsumme/vayu-UniXNU (`PORTING.md`).
 - 0163 Novatek NT36672C touch (`bsd/dev/vayu_nvt.c`, started from `sweet_ufs.c`
   after `sweet_fts_init`): bit-banged SPI mode 0 on GPIO 55-58, reset 12;
   ENG reset, trim-ID check, firmware download from `/fw/` on the root (the chip
-  is flashless) with the boot loader's CRC check, then reports read every 8 ms
-  (shortcut: INT 122 not used yet). Firmware parsing is in `vayu_nvt_fw.h`,
+  is flashless) with the boot loader's CRC check, then a report read on every
+  INT 122 rising edge, latched by the TLMM (raw status on, not routed to the
+  GIC) and checked every 2 ms; a fallback read every 50 ms while a finger is
+  down and every 1 s otherwise. `vayutouchpoll=1` restores plain 8 ms polling. Firmware parsing is in `vayu_nvt_fw.h`,
   tested on the host by vayu-UniXNU `tools/test-nvt-fw.c`. Boot-args
   `vayutouch=0`, `vayutouchfw=2` (CSOT), `vayutouchlog=1`. Built by CI run
   45465728188 and booted on vayu 2026-11-24: touch works on the lock screen
