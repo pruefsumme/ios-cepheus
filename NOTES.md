@@ -682,7 +682,12 @@ github.com/pruefsumme/vayu-UniXNU (`PORTING.md`).
   (kernel_map), not `ml_io_map` (the io_submap that ran out in 0160).
 - 0166 battery design capacity 5160 mAh (vayu DT `nom-batt-capacity-mah`,
   "J20S_nvt_5160mah"; cepheus had 3300). Temperature is still the 25 C
-  fallback; ios-vayu reads it from the RRADC (0x4288/0x4289). Firmware parsing is in `vayu_nvt_fw.h`,
+  fallback; ios-vayu reads it from the RRADC (0x4288/0x4289).
+- 0167 GPU 675 MHz: SM8150 v2's table (vayu DT gpu_opp_table_v2) has 675 MHz at
+  RPMh NOM_L1 (320) above 585 at NOM; added as level 6 of the HFI perf table
+  (`gpu_khz`/`gpu_lvl`, the "6"s replaced by `GPU_LEVELS`). It is rated only for
+  speed-bin 1 chips: `gpu_speed_bin()` reads QFPROM 0x784130 bits 31:29 (vayu:
+  0x306300a5 -> bin 1) and `sweetgpufreq=6` falls back to 585 on any other bin. Firmware parsing is in `vayu_nvt_fw.h`,
   tested on the host by vayu-UniXNU `tools/test-nvt-fw.c`. Boot-args
   `vayutouch=0`, `vayutouchfw=2` (CSOT), `vayutouchlog=1`. Built by CI run
   45465728188 and booted on vayu 2026-11-24: touch works on the lock screen
