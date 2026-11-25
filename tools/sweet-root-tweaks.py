@@ -10,7 +10,9 @@ turned the plain mkiosroot.sh output into the images that reach the home
 screen (image versions v8-v14 in NOTES.md):
 
   launchd.plist   _PanicOnCrash -> _PanicOnCrasX (a crashing daemon must not
-                  panic the system); CommCenter jobs removed (no baseband: it
+                  panic the system); vmd and dasd removed (HANDOFF 2026-11-20:
+                  with no modem they loop, ~4 cores and ~590 mA between them
+                  and coreduetd); CommCenter jobs removed (no baseband: it
                   crash-loops and Setup blocks on its CoreTelephony XPC)
   containers      /private/var/containers/{Bundle,Data/System,Shared/SystemGroup,Temp}
                   (on iOS they live on the data volume)
@@ -64,11 +66,16 @@ def launchd(root):
         if '_PanicOnCrash' in job:
             job['_PanicOnCrasX'] = job.pop('_PanicOnCrash')
             renamed += 1
-    removed = [k for k, j in jobs.items() if j.get('Label') == 'com.apple.CommCenter']
+    unwanted = ('com.apple.CommCenter', 'com.apple.vmd', 'com.apple.dasd')
+    removed = [k for k, j in jobs.items() if j.get('Label') in unwanted]
+    labels = {jobs[k]['Label'] for k in removed}
     for k in removed:
         del jobs[k]
     save(path, plist, st.st_uid, st.st_gid, st.st_mode & 0o7777)
-    print(f'launchd.plist: {renamed} _PanicOnCrash renamed, {len(removed)} CommCenter jobs removed')
+    print(f'launchd.plist: {renamed} _PanicOnCrash renamed, removed {sorted(labels)} ({len(removed)} jobs)')
+    for label in unwanted:
+        if label not in labels:
+            print(f'launchd.plist: no job labelled {label} (already removed, or a different label)')
 
 
 def containers(root):
