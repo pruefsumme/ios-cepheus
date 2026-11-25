@@ -33,6 +33,10 @@ sha2 = { version = "0.10", features = ["asm"] }
 [profile.release]
 panic = "unwind"
 debug = 1
+# As UniXNU builds this bridge: the display thread spends most of a frame in small runtime
+# functions, which only cross-crate inlining reaches.
+lto = "fat"
+codegen-units = 1
 EOF
 if [ "$target" = ios ]; then triple=aarch64-apple-ios; else triple=aarch64-apple-darwin; fi
 NMB_FIXTURE_AIR=$OUT/runtime_examples.air NMB_FC_AIR=$OUT/function_constant.air IPHONEOS_DEPLOYMENT_TARGET=16.0 \
