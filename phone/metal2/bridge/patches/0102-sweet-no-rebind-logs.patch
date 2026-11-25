@@ -1,0 +1,58 @@
+diff --git a/crates/metal2vulkan-runtime/src/blit.rs b/crates/metal2vulkan-runtime/src/blit.rs
+index 2af641b..524338d 100644
+--- a/crates/metal2vulkan-runtime/src/blit.rs
++++ b/crates/metal2vulkan-runtime/src/blit.rs
+@@ -160,7 +160,7 @@ impl CommandBuffer {
+             core: EncoderCore::open(self, "blit_command_encoder", true)?,
+             pattern: None,
+             shadows: Vec::new(),
+-            log: self.device().shared().rebinds.any().then(CallLog::new),
++            log: self.device().shared().rebinds.logs_calls().then(CallLog::new),
+         })
+     }
+ }
+diff --git a/crates/metal2vulkan-runtime/src/compute.rs b/crates/metal2vulkan-runtime/src/compute.rs
+index 0863fd5..8c9d454 100644
+--- a/crates/metal2vulkan-runtime/src/compute.rs
++++ b/crates/metal2vulkan-runtime/src/compute.rs
+@@ -226,7 +226,7 @@ impl CommandBuffer {
+             indirect_stage_in: None,
+             residency: self.inherited_residency(false),
+             captures: Captures::default(),
+-            log: self.device().shared().rebinds.any().then(CallLog::new),
++            log: self.device().shared().rebinds.logs_calls().then(CallLog::new),
+             dispatches: 0,
+         })
+     }
+diff --git a/crates/metal2vulkan-runtime/src/rebind.rs b/crates/metal2vulkan-runtime/src/rebind.rs
+index 2bce8e6..23a3c2c 100644
+--- a/crates/metal2vulkan-runtime/src/rebind.rs
++++ b/crates/metal2vulkan-runtime/src/rebind.rs
+@@ -170,6 +170,14 @@ impl Rebinds {
+         self.live.load(Ordering::Relaxed) > 0
+     }
+ 
++    /// Whether encoders log their calls so a rebind can encode them again (`replay.rs`).
++    /// Off in this build: the iOS bridge never rebinds or detaches a buffer, so the logs were
++    /// pure cost on every encoder call. A rebind would fail `EncodedUseRebound`, as it does for
++    /// an encoder that logs nothing. The holds (`touch_keys`) stay as they are.
++    pub(super) fn logs_calls(&self) -> bool {
++        false
++    }
++
+     /// Note the buffer of `key` over host pages, `cell` its hold on them.
+     pub(super) fn register(&self, key: ResourceKey, cell: &Arc<HostCell>) {
+         let entry = Entry {
+diff --git a/crates/metal2vulkan-runtime/src/render.rs b/crates/metal2vulkan-runtime/src/render.rs
+index 119119d..16096bc 100644
+--- a/crates/metal2vulkan-runtime/src/render.rs
++++ b/crates/metal2vulkan-runtime/src/render.rs
+@@ -1262,7 +1262,7 @@ impl CommandBuffer {
+             None => device
+                 .shared()
+                 .rebinds
+-                .any()
++                .logs_calls()
+                 .then(|| RenderLog::new(descriptor)),
+             Some(_) => None,
+         };
