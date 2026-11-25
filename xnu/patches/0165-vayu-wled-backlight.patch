@@ -1,0 +1,214 @@
+diff --git a/bsd/dev/sweet_spmi.c b/bsd/dev/sweet_spmi.c
+index d97eb8a..e41ed5c 100644
+--- a/bsd/dev/sweet_spmi.c
++++ b/bsd/dev/sweet_spmi.c
+@@ -7,6 +7,11 @@
+  * Also the PM8150 RTC (peripheral 0x60) for the time of day
+  * (SweetPlatformExpert.cpp) and the PM8150B (USID 2) FG-gen4/charger
+  * registers for the cepheus battery backend (SweetBattery.cpp).
++ *
++ * One exception to read-only, for vayu's LCD backlight: sweet_spmi_write()
++ * may write the PM8150L WLED (SID 5, peripherals 0xd8 control and 0xd9
++ * sink) through this EE's own channel, and only if the arbiter says the
++ * apps EE owns that peripheral.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
+@@ -22,6 +27,8 @@ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ #define SP_CFG_PA  0x0c40a000u
+ #define SP_NO_APID 0xffffu
+ #define SP_USID_PM8150B 2u
++#define SP_CHNLS_PA 0x0c600000u         /* owner channels, 0x10000 per APID */
++#define SP_SID_WLED 5u                  /* PM8150L second SID: WLED 0xd8/0xd9 */
+ 
+ static vm_offset_t sp_core, sp_obs, sp_cfg;
+ static IOLock *sp_lock;
+@@ -29,6 +36,13 @@ static unsigned sp_count;
+ static bool sp_attempted, sp_ready;
+ /* A timed-out command may complete late: never reuse that lane this boot. */
+ static bool sp_poisoned[512];
++static vm_offset_t sp_chnl[512];        /* write channels, mapped on first use */
++
++static bool
++sp_is_wled(unsigned sid, unsigned peripheral)
++{
++	return sid == SP_SID_WLED && (peripheral == 0xd8 || peripheral == 0xd9);
++}
+ 
+ static uint32_t
+ sp_rd(vm_offset_t base, unsigned off)
+@@ -108,7 +122,7 @@ sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out)
+ 		    peripheral == 0x40 || peripheral == 0x41)) {
+ 			return -1;
+ 		}
+-	} else {
++	} else if (!sp_is_wled(sid, peripheral)) {
+ 		return -1;
+ 	}
+ 	IOLockLock(sp_lock);
+@@ -141,4 +155,45 @@ sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out)
+ 	IOLockUnlock(sp_lock);
+ 	return -1;
+ }
++
++int
++sweet_spmi_write(unsigned sid, unsigned addr, uint8_t value)
++{
++	unsigned peripheral = addr >> 8;
++	if (!sp_ready || addr > 0xffffu || !sp_is_wled(sid, peripheral)) {
++		return -1;
++	}
++	IOLockLock(sp_lock);
++	uint16_t apid = sp_find_apid((sid << 8) | peripheral);
++	if (apid == SP_NO_APID || sp_poisoned[apid] ||
++	    (sp_rd(sp_cfg, 0x700u + 4u * apid) & 7u) != 0) {
++		IOLockUnlock(sp_lock);
++		return -1;
++	}
++	if (!sp_chnl[apid]) {
++		sp_chnl[apid] = ml_io_map(SP_CHNLS_PA + 0x10000u * apid, 0x1000);
++	}
++	vm_offset_t ch = sp_chnl[apid];
++	if (!ch) {
++		IOLockUnlock(sp_lock);
++		return -1;
++	}
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*(volatile uint32_t *)(ch + 0x10u) = value;                   /* WDATA0 */
++	*(volatile uint32_t *)(ch + 0x00u) = (addr & 0xffu) << 4;     /* EXT_WRITEL, BC=0 */
++	__asm__ volatile("dsb osh" ::: "memory");
++	for (unsigned i = 0; i < 1000; ++i) {
++		uint32_t status = sp_rd(ch, 0x08u);
++		if (status & 1u) {
++			IOLockUnlock(sp_lock);
++			return (status & 0x0eu) ? -1 : 0;
++		}
++		delay(1);
++	}
++	sp_poisoned[apid] = true;
++	printf("SWEET BATTERY: SPMI write timeout sid=%u addr=%#x APID=%u disabled\n",
++	    sid, addr, apid);
++	IOLockUnlock(sp_lock);
++	return -1;
++}
+ #endif /* ARM64_BOARD_CONFIG_SWEET */
+diff --git a/bsd/dev/sweet_spmi.h b/bsd/dev/sweet_spmi.h
+index 45565d1..36488df 100644
+--- a/bsd/dev/sweet_spmi.h
++++ b/bsd/dev/sweet_spmi.h
+@@ -8,6 +8,8 @@ extern "C" {
+ int sweet_spmi_init(void);
+ /* Thread context only; 0 success, -1 failure; *out unchanged on failure. */
+ int sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out);
++/* PM8150L WLED only (SID 5, 0xd8xx/0xd9xx), if this EE owns it. 0 or -1. */
++int sweet_spmi_write(unsigned sid, unsigned addr, uint8_t value);
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index f7694ac..7204953 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -459,6 +459,94 @@ IOMobileFramebuffer::setProperties(OSObject *properties)
+ 	return kIOReturnSuccess;
+ }
+ 
++/*
++ * vayu (Poco X3 Pro): the LCD backlight is the PM8150L WLED (panel DT:
++ * bl_ctrl_wled), SPMI SID 5, control 0xd800, sink 0xd900. Register layout
++ * from mainline drivers/video/backlight/qcom-wled.c (WLED5). Boot-arg
++ * sweetbl_wled=1 drives it from CoreBrightness: brightness on the modulator
++ * the strings use, then that modulator's sync bit; 0 turns the module off.
++ * ABL's current/OVP settings are left alone.
++ */
++#include "../../../bsd/dev/sweet_spmi.h"
++
++#define WLED_SID                5u
++#define WLED_CTRL_MOD_EN        0xd846u /* bit 7: module on */
++#define WLED_SINK_MOD_A_EN      0xd950u
++#define WLED_SINK_MOD_B_EN      0xd960u
++#define WLED_SINK_WIDTH(m)      ((m) ? 0xd962u : 0xd952u)   /* 0: 12-bit, 1: 15-bit */
++#define WLED_SINK_BRIGHT_LSB(m) ((m) ? 0xd963u : 0xd953u)
++#define WLED_SINK_BRIGHT_MSB(m) ((m) ? 0xd964u : 0xd954u)
++#define WLED_SINK_MOD_SYNC      0xd965u /* bit 0: A, bit 1: B */
++#define WLED_SINK_STR0_SRC      0xd973u /* string 0's modulator: 0 A, 1 B */
++
++static int
++sweet_bl_wled_mode(void)
++{
++	static int mode = -1;
++
++	if (mode < 0) {
++		mode = 0;
++		PE_parse_boot_argn("sweetbl_wled", &mode, sizeof(mode));
++	}
++	return mode;
++}
++
++/* 16.16 user brightness (0..0x10000) -> the WLED, 0 = module off. */
++static void
++sweet_bl_wled_level(uint64_t brightness)
++{
++	static int mod = -1;            /* the modulator the strings use, read once */
++	static uint32_t max = 0xfff;
++	static unsigned int logged;
++	uint8_t v = 0, src = 0, a_en = 0, b_en = 0, width = 0;
++	uint32_t level;
++	int rc = 0;
++
++	if (!sweet_bl_wled_mode() || sweet_spmi_init() != 0) {
++		return;
++	}
++	if (mod < 0) {
++		if (sweet_spmi_read(WLED_SID, WLED_SINK_STR0_SRC, &src) != 0 ||
++		    sweet_spmi_read(WLED_SID, WLED_SINK_MOD_A_EN, &a_en) != 0 ||
++		    sweet_spmi_read(WLED_SID, WLED_SINK_MOD_B_EN, &b_en) != 0 ||
++		    sweet_spmi_read(WLED_SID, WLED_CTRL_MOD_EN, &v) != 0) {
++			IOLog("SWEET BL: WLED not readable over SPMI\n");
++			return;
++		}
++		mod = (src & 3) ? 1 : 0;
++		(void)sweet_spmi_read(WLED_SID, WLED_SINK_WIDTH(mod), &width);
++		max = (width & 1) ? 0x7fff : 0xfff;
++		IOLog("SWEET BL: WLED ctrl %x, mod A %x B %x, strings on mod %c, max %x\n",
++		    v, a_en, b_en, mod ? 'B' : 'A', max);
++	}
++	if (brightness == 0) {
++		level = 0;
++	} else if (brightness >= 0x10000) {
++		level = max;
++	} else {
++		level = (uint32_t)(brightness * max >> 16);
++		level = level ? level : 1;
++	}
++	if (sweet_spmi_read(WLED_SID, WLED_CTRL_MOD_EN, &v) != 0) {
++		return;
++	}
++	if (level == 0) {
++		rc = sweet_spmi_write(WLED_SID, WLED_CTRL_MOD_EN, v & ~0x80);
++	} else {
++		rc |= sweet_spmi_write(WLED_SID, WLED_SINK_BRIGHT_LSB(mod), (uint8_t)level);
++		rc |= sweet_spmi_write(WLED_SID, WLED_SINK_BRIGHT_MSB(mod), (uint8_t)(level >> 8));
++		rc |= sweet_spmi_write(WLED_SID, WLED_SINK_MOD_SYNC, 0);
++		rc |= sweet_spmi_write(WLED_SID, WLED_SINK_MOD_SYNC, mod ? 2 : 1);
++		if (!(v & 0x80)) {
++			rc |= sweet_spmi_write(WLED_SID, WLED_CTRL_MOD_EN, v | 0x80);
++		}
++	}
++	if (rc != 0 || logged < 8) {
++		logged++;
++		IOLog("SWEET BL: WLED level %x (%s)\n", level, rc ? "write refused" : "ok");
++	}
++}
++
+ IOReturn
+ AppleARMBacklight::setProperties(OSObject *properties)
+ {
+@@ -483,6 +571,7 @@ AppleARMBacklight::setProperties(OSObject *properties)
+ 		sweet_bl_requested =
+ 		    sweet_bl_level(number->unsigned64BitValue());
+ 		sweet_bl_dcs_level(sweet_bl_requested);
++		sweet_bl_wled_level(number->unsigned64BitValue());
+ 	}
+ 	return kIOReturnSuccess;
+ }

@@ -668,7 +668,16 @@ github.com/pruefsumme/vayu-UniXNU (`PORTING.md`).
   Before the black write it waits for queued GPU presents
   (`sweet_gpu_present_idle`): a present landing afterwards repainted the top
   ~170 rows (its corner band is written last), seen on vayu as the top of the
-  lock screen staying visible. Firmware parsing is in `vayu_nvt_fw.h`,
+  lock screen staying visible.
+- 0165 `sweetbl_wled=1`: CoreBrightness's brightness drives vayu's LCD
+  backlight, the PM8150L WLED (panel DT `bl_ctrl_wled`, SPMI SID 5, control
+  0xd800, sink 0xd900; WLED5 layout from mainline qcom-wled.c). Writes the
+  modulator the strings use (read from the sink once), toggles its sync bit,
+  and turns the module off for brightness 0. `sweet_spmi_write()` is the
+  kernel's only PMIC write: WLED peripherals only, and only if the apps EE
+  owns them. Current and OVP settings stay as ABL left them.
+- Battery: the cepheus PM8150B FG-gen4 backend works unchanged on vayu (same
+  PMIC): 27%, 3806 mV, charging, read at boot. Firmware parsing is in `vayu_nvt_fw.h`,
   tested on the host by vayu-UniXNU `tools/test-nvt-fw.c`. Boot-args
   `vayutouch=0`, `vayutouchfw=2` (CSOT), `vayutouchlog=1`. Built by CI run
   45465728188 and booted on vayu 2026-11-24: touch works on the lock screen
