@@ -262,6 +262,12 @@ def build(seed=None, qemu=False, highmem=False, amp=False, vayu=False):
     ])
 
     product_props = d22ap_product()
+    if product_props and vayu:
+        # The iPhone X says P3. With that, after iOS's caches are reset, backboardd
+        # renders in 'b3a8' (10-bit BGR10_XR + alpha plane), which the GPU present
+        # path cannot take, and the screen stays on the console. vayu's LCD is sRGB.
+        product_props = [(k, cstr('sRGB') if k == 'artwork-display-gamut' else v)
+                         for k, v in product_props]
     product = [node('product', [ph()] + product_props)] if product_props else []
 
     # Identity of the iPhone X whose userland runs here: compatible[0] is
