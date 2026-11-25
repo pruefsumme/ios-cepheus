@@ -11,7 +11,7 @@
 """
 import os, socket, stat, sys
 
-# 127.0.0.1:2223 is FlameBridge's forward; set CEPHEUS_FILES_HOST=192.168.7.2
+# 127.0.0.1:2223 is FlameBridge's forward; set CEPH_FILES_HOST=192.168.7.2 (Linux: direct over USB)
 # to talk to the phone directly when the relay is not running.
 HOST, PORT = os.environ.get('CEPH_FILES_HOST', '127.0.0.1'), 2223
 
