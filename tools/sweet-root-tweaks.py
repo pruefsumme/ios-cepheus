@@ -66,7 +66,7 @@ def launchd(root):
         if '_PanicOnCrash' in job:
             job['_PanicOnCrasX'] = job.pop('_PanicOnCrash')
             renamed += 1
-    unwanted = ('com.apple.CommCenter', 'com.apple.vmd', 'com.apple.dasd')
+    unwanted = ('com.apple.CommCenter', 'com.apple.voicemail.vmd', 'com.apple.dasd')
     removed = [k for k, j in jobs.items() if j.get('Label') in unwanted]
     labels = {jobs[k]['Label'] for k in removed}
     for k in removed:
