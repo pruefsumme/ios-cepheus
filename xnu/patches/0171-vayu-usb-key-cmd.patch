@@ -1,0 +1,27 @@
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+index b1ed9e5..01ce774 100644
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -899,6 +899,7 @@ extern int sync(proc_t p, struct sync_args *uap, int32_t *retval);
+  * so a real finger is not disturbed). For driving the UI from the Mac.
+  */
+ extern void sweet_hid_touch(int finger, int down, int x, int y);
++extern void sweet_hid_key(int key, int down);
+ 
+ static int
+ ud_num(const char **p)
+@@ -986,6 +987,14 @@ ud_cmd_thread(void *arg __unused, wait_result_t wr __unused)
+ 			ud_touch_cmd(cmd);
+ 			continue;
+ 		}
++		if (strncmp(cmd, "power", 5) == 0 || strncmp(cmd, "volup", 5) == 0 || strncmp(cmd, "voldown", 7) == 0) {
++			int k = cmd[0] == 'p' ? 0 : cmd[3] == 'u' ? 1 : 2;
++			sweet_hid_key(k, 1);
++			ud_sleep_ms(100);
++			sweet_hid_key(k, 0);
++			printf("SWEET CMD: key %d\n", k);
++			continue;
++		}
+ 		if (strncmp(cmd, "rtc", 3) == 0) {
+ 			extern int sweet_rtc_seconds(uint32_t *secs);   /* SweetPlatformExpert.cpp */
+ 			uint32_t rtc = 0;

@@ -1,0 +1,40 @@
+name: audio
+
+on:
+  workflow_dispatch:
+
+jobs:
+  audio:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: iOS compiler wrapper
+        run: |
+          set -euxo pipefail
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+          mkdir -p work/userland/bin
+          cat > work/userland/bin/ios-cc <<'EOF'
+          #!/bin/sh
+          exec "$(xcrun -f clang)" -arch arm64 -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" -miphoneos-version-min=16.0 "$@"
+          EOF
+          chmod +x work/userland/bin/ios-cc
+          work/userland/bin/ios-cc --version | head -1
+
+      - name: Build HakiosAudio.driver and sound_test
+        run: |
+          set -euxo pipefail
+          chmod +x phone/audio/build.sh
+          phone/audio/build.sh
+          file phone/audio/out/HakiosAudio.driver/HakiosAudio phone/audio/out/sound_test
+          codesign -dv phone/audio/out/HakiosAudio.driver/HakiosAudio 2>&1 | head -5
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: audio-ios16
+          path: |
+            phone/audio/out/HakiosAudio.driver
+            phone/audio/out/sound_test
+          if-no-files-found: error

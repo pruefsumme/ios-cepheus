@@ -1,0 +1,1195 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+index 25f4083..1ada86c 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -132,6 +132,7 @@ bsd/dev/hakios.slim.c		standard
+ bsd/dev/hakios.mic.c		standard
+ bsd/dev/hakios.guard.c		standard
+ bsd/dev/hakios.cs35l41.c		standard
++bsd/dev/vayu_tas256x.c			standard
+ bsd/dev/mem.c				standard
+ bsd/dev/munge.c 			optional config_requires_u32_munging
+ bsd/dev/unix_startup.c			standard
+diff --git a/bsd/dev/hakios.cs35l41.c b/bsd/dev/hakios.cs35l41.c
+index b617f20..c5baf88 100644
+--- a/bsd/dev/hakios.cs35l41.c
++++ b/bsd/dev/hakios.cs35l41.c
+@@ -65,6 +65,7 @@
+ #include <kern/thread.h>
+ #include <libkern/libkern.h>
+ #include <mach/mach_types.h>
++#include <pexpert/device_tree.h>
+ #include <pexpert/pexpert.h>
+ #include <sys/systm.h>
+ #include <sys/hakios.audio.h>
+@@ -73,6 +74,43 @@
+ extern vm_offset_t ml_io_map_unmappable(vm_offset_t phys_addr, vm_size_t size, unsigned int flags);
+ extern kern_return_t thread_terminate(thread_t thread);
+ extern void loader_log_putc(char c);
++extern void vayu_tas256x_init(void);
++extern bool vayu_tas256x_prepare(void);
++extern bool vayu_tas256x_start(void);
++extern bool vayu_tas256x_volume(uint32_t below, uint32_t step_ms);
++extern bool vayu_tas256x_healthy(void);
++extern void vayu_tas256x_stop(void);
++extern void vayu_tas256x_quiesce(void);
++extern uint32_t vayu_tas256x_monitor(bool tell);
++
++static bool
++vayu_is_board(void)
++{
++	static int cached = -1;
++	DTEntry root;
++	void const *prop;
++	unsigned int size, off;
++
++	if (cached >= 0) {
++		return cached != 0;
++	}
++	cached = 0;
++	if (SecureDTLookupEntry(NULL, "/", &root) != kSuccess ||
++	    SecureDTGetProperty(root, "compatible", &prop, &size) != kSuccess) {
++		return false;
++	}
++	off = 0;
++	while (off < size) {
++		const char *s = (const char *)prop + off;
++		unsigned int len = (unsigned int)strnlen(s, size - off);
++		if (len == 11 && memcmp(s, "xiaomi,vayu", 11) == 0) {
++			cached = 1;
++			return true;
++		}
++		off += len + 1;
++	}
++	return false;
++}
+ 
+ static vm_offset_t tlmm_north, tlmm_south;
+ static uint32_t probe_level;
+@@ -666,6 +704,9 @@ volume_put(uint32_t below)
+ bool
+ hakios_speaker_prepare(__unused const uint8_t *acf, __unused uint64_t size)
+ {
++	if (vayu_is_board()) {
++		return vayu_tas256x_prepare();
++	}
+ 	static const uint32_t errata_b0[][2] = {
+ 		{ CS35L41_VIMON_SPKMON_RESYNC, 0 }, { 0x00004310, 0 }, { CS35L41_VPVBST_FS_SEL, 0 }, { CS35L41_BSTCVRT_DCM_CTRL, 0x51 },
+ 		{ CS35L41_DSP1_YM_ACCEL_PL0_PRI, 0 }, { CS35L41_DSP1_XM_ACCEL_PL0_PRI, 0 }, { CS35L41_PWR_CTRL2, 0 },
+@@ -748,6 +789,9 @@ hakios_speaker_prepare(__unused const uint8_t *acf, __unused uint64_t size)
+ bool
+ hakios_speaker_start(void)
+ {
++	if (vayu_is_board()) {
++		return vayu_tas256x_start();
++	}
+ 	uint32_t status = 0;
+ 
+ 	if (broken || !prepared) {
+@@ -781,6 +825,9 @@ hakios_speaker_start(void)
+ bool
+ hakios_speaker_volume(uint32_t below, uint32_t step_ms)
+ {
++	if (vayu_is_board()) {
++		return vayu_tas256x_volume(below, step_ms);
++	}
+ 	uint32_t target = below > VOL_LOWEST ? VOL_LOWEST + 1 : below;
+ 
+ 	if (broken || !started) {
+@@ -813,6 +860,9 @@ static uint32_t warnings;
+ bool
+ hakios_speaker_healthy(void)
+ {
++	if (vayu_is_board()) {
++		return vayu_tas256x_healthy();
++	}
+ 	uint32_t status = 0;
+ 
+ 	if (broken) {
+@@ -836,6 +886,9 @@ hakios_speaker_healthy(void)
+ uint32_t
+ hakios_speaker_monitor(bool tell)
+ {
++	if (vayu_is_board()) {
++		return vayu_tas256x_monitor(tell);
++	}
+ 	if (warnings && tell) {
+ 		say("cs35l41: a temperature warning: 6 dB less\n");
+ 	}
+@@ -845,6 +898,10 @@ hakios_speaker_monitor(bool tell)
+ void
+ hakios_speaker_stop(void)
+ {
++	if (vayu_is_board()) {
++		vayu_tas256x_stop();
++		return;
++	}
+ 	uint32_t status = 0;
+ 
+ 	if (broken || !started) {
+@@ -871,6 +928,10 @@ hakios_speaker_stop(void)
+ void
+ hakios_speaker_quiesce(void)
+ {
++	if (vayu_is_board()) {
++		vayu_tas256x_quiesce();
++		return;
++	}
+ 	if (!prepared || tlmm_north == 0) {
+ 		return;
+ 	}
+@@ -936,6 +997,10 @@ probe_thread(__unused void *parameter, __unused wait_result_t result)
+ void
+ hakios_speaker_init(void)
+ {
++	if (vayu_is_board()) {
++		vayu_tas256x_init();
++		return;
++	}
+ 	thread_t thread;
+ 
+ 	if (!PE_parse_boot_argn("speaker_probe", &probe_level, sizeof(probe_level)) || probe_level == 0) {
+diff --git a/bsd/dev/hakios.sound.c b/bsd/dev/hakios.sound.c
+index 571c890..a4db125 100644
+--- a/bsd/dev/hakios.sound.c
++++ b/bsd/dev/hakios.sound.c
+@@ -280,9 +280,36 @@ static const struct sound_board {
+ 	   * (logs/155005, 155411); the amplifier 3 dB under Android's level instead.
+ 	   */
+ 	  "the speaker's I2S port (QUAT_MI2S_RX, 0x1006)", 24, 0 },
++	{ "vayu", 0x03d00000, cepheus_pins, 137, 138, true, 0x1006, 0x106, 1536000, 1, 2, 16, 2, 0x1b21, NULL,
++	  "the vayu speakers' I2S port (QUAT_MI2S_RX, 0x1006)", 0, 0 },
+ };
+ static const struct sound_board *board = &sound_boards[0];
+ 
++static bool
++dt_compat_has(const char *needle)
++{
++	DTEntry root;
++	void const *prop;
++	unsigned int size, off;
++	size_t nlen;
++
++	if (SecureDTLookupEntry(NULL, "/", &root) != kSuccess ||
++	    SecureDTGetProperty(root, "compatible", &prop, &size) != kSuccess) {
++		return false;
++	}
++	nlen = strlen(needle);
++	off = 0;
++	while (off < size) {
++		const char *s = (const char *)prop + off;
++		unsigned int len = (unsigned int)strnlen(s, size - off);
++		if (len == nlen && memcmp(s, needle, nlen) == 0) {
++			return true;
++		}
++		off += len + 1;
++	}
++	return false;
++}
++
+ static void
+ choose_board(void)
+ {
+@@ -290,6 +317,15 @@ choose_board(void)
+ 	void const *prop;
+ 	unsigned int size;
+ 
++	if (dt_compat_has("xiaomi,vayu")) {
++		for (unsigned i = 0; i < sizeof(sound_boards) / sizeof(sound_boards[0]); i++) {
++			if (strcmp(sound_boards[i].name, "vayu") == 0) {
++				board = &sound_boards[i];
++				tlmm.phys = board->tlmm;
++				return;
++			}
++		}
++	}
+ 	if (SecureDTLookupEntry(NULL, "/arm-io", &entry) == kSuccess &&
+ 	    SecureDTGetProperty(entry, "device_type", &prop, &size) == kSuccess) {
+ 		for (unsigned i = 0; i < sizeof(sound_boards) / sizeof(sound_boards[0]); i++) {
+@@ -978,7 +1014,7 @@ stream_on(void)
+ 		uint16_t channels, bits;
+ 		uint32_t rate;
+ 		uint8_t map[8];
+-	} __attribute__((packed)) open = { 0, ADM_PATH_PLAYBACK, PORT, 0xffff, ADM_TOPOLOGY_NONE, board->adm_channels, ADM_BITS, RATE,
++	} __attribute__((packed)) open = { 0, ADM_PATH_PLAYBACK, PORT, 0xffff, ADM_TOPOLOGY_NONE, board->adm_channels, (uint16_t)(board->port_bits == 16 ? 16 : ADM_BITS), RATE,
+ 		                           { board->adm_channels == 1 ? PCM_CHANNEL_FC : PCM_CHANNEL_FL,
+ 		                             board->adm_channels == 1 ? 0 : PCM_CHANNEL_FR } };
+ 	struct {
+diff --git a/bsd/dev/vayu_tas256x.c b/bsd/dev/vayu_tas256x.c
+new file mode 100644
+index 0000000..ea7ab43
+--- /dev/null
++++ b/bsd/dev/vayu_tas256x.c
+@@ -0,0 +1,972 @@
++/*
++ * Speaker amplifiers for Poco X3 Pro (vayu, SM8150-AC):
++ *   0x4c: TI TAS2562 (bottom speaker, right channel), SDZ GPIO 92 (north)
++ *   0x4d: TI TAS2564 (earpiece / top speaker, left channel), SDZ GPIO 89 (north)
++ *
++ * Bit-banged I2C on QUP0 SE7 (GPIO 98 SDA, GPIO 99 SCL, south TLMM 0x03d00000);
++ * pin configuration is saved and restored around each transaction.
++ * Audio arrives over QUAT_MI2S_RX (GPIO 137-140) driven by the ADSP (hakios.sound.c).
++ *
++ * Register sequence and safety caps follow telegdyd/ios-vayu (vayu_audio.c) and
++ * Linux tas256x: hardware limiter enabled on TAS2562, TAS2562 DVC capped at
++ * -6 dB (index 52), TAS2564 DVC capped at -18 dB (index 46), fault polling on
++ * latched registers 0x24/0x25, and panic-safe quiesce() driving SDZ low.
++ */
++#include <kern/clock.h>
++#include <kern/locks.h>
++#include <kern/thread.h>
++#include <libkern/libkern.h>
++#include <mach/mach_time.h>
++#include <mach/mach_types.h>
++#include <pexpert/pexpert.h>
++#include <sys/systm.h>
++#include <sys/hakios.audio.h>
++#include <vm/memory_types.h>
++
++extern vm_offset_t ml_io_map_unmappable(vm_offset_t phys_addr, vm_size_t size, unsigned int flags);
++extern kern_return_t thread_terminate(thread_t thread);
++extern void loader_log_putc(char c);
++
++void vayu_tas256x_init(void);
++bool vayu_tas256x_prepare(void);
++bool vayu_tas256x_start(void);
++bool vayu_tas256x_volume(uint32_t below, uint32_t step_ms);
++bool vayu_tas256x_healthy(void);
++void vayu_tas256x_stop(void);
++void vayu_tas256x_quiesce(void);
++uint32_t vayu_tas256x_monitor(bool tell);
++
++#define TLMM_NORTH_PA       0x03900000u
++#define TLMM_SOUTH_PA       0x03d00000u
++#define TLMM_MAP_SIZE       0x00100000u
++#define PIN_SDA             98u
++#define PIN_SCL             99u
++#define PIN_SDZ_LEFT        89u
++#define PIN_SDZ_RIGHT       92u
++#define CFG_OUTPUT          (1u << 9)
++
++#define TAS_PAGE            0x00u
++#define TAS_RESET           0x01u
++#define TAS_POWER           0x02u
++#define TAS_POWER_OFF       0x0eu
++#define TAS_POWER_ON_IV     0x00u
++#define TAS_DCBLOCKER       0x03u
++#define TAS_PLAYBACK0       0x03u
++#define TAS_MISC            0x04u
++#define TAS_TDM0            0x06u
++#define TAS_TDM1            0x07u
++#define TAS_TDM2            0x08u
++#define TAS_TDM4            0x0au
++#define TAS_LIMITER         0x12u
++#define TAS_BOP             0x14u
++#define TAS_MASK0           0x1au
++#define TAS_MASK1           0x1bu
++#define TAS_LATCHED0        0x24u
++#define TAS_LATCHED1        0x25u
++#define TAS_INT_CONFIG      0x30u
++#define TAS_CLOCK_CONFIG    0x38u
++#define TAS_ICN_SW          0x3eu
++#define TAS_CHIPID          0x7du
++#define TAS_BOOK            0x7fu
++
++#define TAS_FAULTS0         0x07u
++#define TAS_FAULTS1         0x0eu
++
++#define TAS_DVC             0x0cu
++#define TAS_ICN_THRESHOLD   0x64u
++#define TAS_ICN_HYSTERESIS  0x6cu
++
++#define TAS_MISC_CLASSD     0x21u
++#define TAS_CMP_HYST        0x08u
++
++#define TAS_ICN_PAGE        0xfdu
++#define TAS_ICN_PAGE_CFG    0x0du
++#define TAS_CLASSD_CFG1     0x19u
++#define TAS_TEST_PAGE_LOCK  0x0du
++#define TAS_DAC_MODULATOR   0x12u
++#define TAS_CLASSD_CFG2     0x32u
++#define TAS_ICN_IMPROVE     0x46u
++
++#define DVC_DEFAULT         52u     /* -6 dB cap for TAS2562 bottom speaker */
++#define EAR_DVC_DEFAULT     46u     /* -18 dB cap for TAS2564 earpiece */
++
++static const uint8_t dvc_table[56][4] = {
++	{ 0x00, 0x00, 0x0D, 0x43 }, { 0x00, 0x00, 0x10, 0xB3 }, { 0x00, 0x00, 0x15, 0x05 }, { 0x00, 0x00, 0x1A, 0x77 },
++	{ 0x00, 0x00, 0x21, 0x51 }, { 0x00, 0x00, 0x29, 0xF1 }, { 0x00, 0x00, 0x34, 0xCE }, { 0x00, 0x00, 0x42, 0x7A },
++	{ 0x00, 0x00, 0x53, 0xB0 }, { 0x00, 0x00, 0x69, 0x5B }, { 0x00, 0x00, 0x84, 0xA3 }, { 0x00, 0x00, 0xA6, 0xFA },
++	{ 0x00, 0x00, 0xD2, 0x37 }, { 0x00, 0x01, 0x08, 0xA5 }, { 0x00, 0x01, 0x4D, 0x2A }, { 0x00, 0x01, 0xA3, 0x6E },
++	{ 0x00, 0x02, 0x10, 0x08 }, { 0x00, 0x02, 0x98, 0xC1 }, { 0x00, 0x03, 0x44, 0xE0 }, { 0x00, 0x04, 0x1D, 0x90 },
++	{ 0x00, 0x05, 0x2E, 0x5B }, { 0x00, 0x06, 0x85, 0xC8 }, { 0x00, 0x08, 0x36, 0x22 }, { 0x00, 0x0A, 0x56, 0x6D },
++	{ 0x00, 0x0D, 0x03, 0xA7 }, { 0x00, 0x10, 0x62, 0x4E }, { 0x00, 0x14, 0xA0, 0x51 }, { 0x00, 0x19, 0xF7, 0x86 },
++	{ 0x00, 0x20, 0xB0, 0xBD }, { 0x00, 0x29, 0x27, 0x9E }, { 0x00, 0x33, 0xCF, 0x8E }, { 0x00, 0x41, 0x39, 0xD3 },
++	{ 0x00, 0x52, 0x1D, 0x51 }, { 0x00, 0x67, 0x60, 0x45 }, { 0x00, 0x82, 0x24, 0x8A }, { 0x00, 0xA3, 0xD7, 0x0A },
++	{ 0x00, 0xCE, 0x43, 0x29 }, { 0x01, 0x03, 0xAB, 0x3D }, { 0x01, 0x46, 0xE7, 0x5E }, { 0x01, 0x9B, 0x8C, 0x27 },
++	{ 0x02, 0x06, 0x1B, 0x8A }, { 0x02, 0x8C, 0x42, 0x40 }, { 0x03, 0x35, 0x25, 0x29 }, { 0x04, 0x09, 0xC2, 0xB1 },
++	{ 0x05, 0x15, 0x6D, 0x69 }, { 0x06, 0x66, 0x66, 0x66 }, { 0x08, 0x0E, 0x9F, 0x97 }, { 0x0A, 0x24, 0xB0, 0x63 },
++	{ 0x0C, 0xC5, 0x09, 0xAC }, { 0x10, 0x13, 0x79, 0x88 }, { 0x14, 0x3D, 0x13, 0x62 }, { 0x19, 0x7A, 0x96, 0x7F },
++	{ 0x20, 0x13, 0x73, 0x9E }, { 0x28, 0x61, 0x9A, 0xEA }, { 0x32, 0xD6, 0x46, 0x18 }, { 0x40, 0x00, 0x00, 0x00 },
++};
++
++static const uint8_t icn_threshold[4] = { 0x00, 0x01, 0x2f, 0x2c };
++static const uint8_t icn_hysteresis[4] = { 0x00, 0x01, 0x5d, 0xc0 };
++static const uint8_t lim_params[5][4] = {
++	{ 0x2D, 0x6A, 0x86, 0x6F },
++	{ 0x48, 0x00, 0x00, 0x00 },
++	{ 0x20, 0x00, 0x00, 0x00 },
++	{ 0x33, 0x33, 0x33, 0x33 },
++	{ 0x10, 0x00, 0x00, 0x00 },
++};
++
++struct tas_amp {
++	uint8_t addr;
++	unsigned sdz_pin;
++	bool tas2564;
++	bool live;
++	bool prepared;
++	uint32_t dvc;
++};
++
++static struct tas_amp amp_bottom = { .addr = 0x4c, .sdz_pin = PIN_SDZ_RIGHT, .tas2564 = false };
++static struct tas_amp amp_ear = { .addr = 0x4d, .sdz_pin = PIN_SDZ_LEFT, .tas2564 = true };
++
++static LCK_GRP_DECLARE(tas_lck_grp, "vayu-tas256x");
++static LCK_MTX_DECLARE(tas_lock, &tas_lck_grp);
++
++static vm_offset_t tlmm_north, tlmm_south;
++static uint32_t taken_cfg[2], taken_io[2];
++static uint64_t i2c_deadline;
++static bool i2c_late;
++static bool broken;
++static bool sdz_ever_raised;
++static uint32_t probe_level;
++static int ear_enabled = 1;
++
++static int say(const char *format, ...) __printflike(1, 2);
++
++static int
++say(const char *format, ...)
++{
++	char line[300];
++	va_list list;
++	int length;
++	const char *c;
++
++	va_start(list, format);
++	length = vsnprintf(line, sizeof(line), format, list);
++	va_end(list);
++	for (c = line; *c != 0; c++) {
++		loader_log_putc(*c);
++	}
++	printf("%s", line);
++	return length;
++}
++
++static inline uint32_t
++rd32(vm_offset_t addr)
++{
++	uint32_t v = *(volatile uint32_t *)addr;
++	__asm__ volatile("dmb oshld" ::: "memory");
++	return v;
++}
++
++static inline void
++wr32(vm_offset_t addr, uint32_t val)
++{
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*(volatile uint32_t *)addr = val;
++	__asm__ volatile("dsb osh" ::: "memory");
++}
++
++static vm_offset_t
++pin_tile(unsigned pin)
++{
++	return (pin >= 89u && pin <= 92u) ? tlmm_north : tlmm_south;
++}
++
++static vm_offset_t
++gpio_cfg(unsigned pin)
++{
++	return pin_tile(pin) + 0x1000UL * pin;
++}
++
++static vm_offset_t
++gpio_io(unsigned pin)
++{
++	return pin_tile(pin) + 0x1000UL * pin + 4u;
++}
++
++static bool
++pin_high(unsigned pin)
++{
++	return (rd32(gpio_io(pin)) & 1u) != 0;
++}
++
++static void
++spin_us(unsigned us)
++{
++	uint64_t ticks, end;
++
++	nanoseconds_to_absolutetime((uint64_t)us * 1000ULL, &ticks);
++	end = mach_absolute_time() + ticks;
++	while (mach_absolute_time() < end) {
++		__asm__ volatile("yield" ::: "memory");
++	}
++}
++
++static void
++sleep_ms(unsigned ms)
++{
++	uint64_t deadline;
++
++	clock_interval_to_deadline(ms, NSEC_PER_MSEC, &deadline);
++	(void)assert_wait_deadline((event_t)&taken_cfg, THREAD_UNINT, deadline);
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
++static bool
++ensure_tlmm(void)
++{
++	if (tlmm_north == 0) {
++		tlmm_north = ml_io_map_unmappable(TLMM_NORTH_PA, TLMM_MAP_SIZE, VM_WIMG_IO);
++	}
++	if (tlmm_south == 0) {
++		tlmm_south = ml_io_map_unmappable(TLMM_SOUTH_PA, TLMM_MAP_SIZE, VM_WIMG_IO);
++	}
++	return tlmm_north != 0 && tlmm_south != 0;
++}
++
++static const char *
++amp_tag(const struct tas_amp *a)
++{
++	return a->tas2564 ? "tas2564(0x4d)" : "tas2562(0x4c)";
++}
++
++/* ---- Bit-banged I2C (QUP0 SE7: GPIO 98 SDA, 99 SCL) ---- */
++
++static void
++half_bit(void)
++{
++	spin_us(5);
++}
++
++static void
++i2c_line(unsigned pin, bool high)
++{
++	uint32_t pull = taken_cfg[pin == PIN_SDA ? 0 : 1] & 3u;
++
++	wr32(gpio_io(pin), 0);
++	wr32(gpio_cfg(pin), pull | (high ? 0u : CFG_OUTPUT));
++}
++
++static void
++bus_give_back(void)
++{
++	wr32(gpio_cfg(PIN_SDA), taken_cfg[0]);
++	wr32(gpio_cfg(PIN_SCL), taken_cfg[1]);
++	wr32(gpio_io(PIN_SDA), taken_io[0] & 2u);
++	wr32(gpio_io(PIN_SCL), taken_io[1] & 2u);
++}
++
++static bool
++bus_take(void)
++{
++	taken_cfg[0] = rd32(gpio_cfg(PIN_SDA));
++	taken_cfg[1] = rd32(gpio_cfg(PIN_SCL));
++	taken_io[0] = rd32(gpio_io(PIN_SDA));
++	taken_io[1] = rd32(gpio_io(PIN_SCL));
++	i2c_line(PIN_SDA, true);
++	i2c_line(PIN_SCL, true);
++	half_bit();
++	if (!pin_high(PIN_SDA) || !pin_high(PIN_SCL)) {
++		bus_give_back();
++		return false;
++	}
++	return true;
++}
++
++static void
++i2c_start(void)
++{
++	i2c_line(PIN_SDA, true);
++	i2c_line(PIN_SCL, true);
++	half_bit();
++	i2c_line(PIN_SDA, false);
++	half_bit();
++	i2c_line(PIN_SCL, false);
++	half_bit();
++}
++
++static void
++i2c_stop(void)
++{
++	i2c_line(PIN_SDA, false);
++	half_bit();
++	i2c_line(PIN_SCL, true);
++	half_bit();
++	i2c_line(PIN_SDA, true);
++	half_bit();
++}
++
++static bool
++scl_high_wait(void)
++{
++	i2c_line(PIN_SCL, true);
++	while (!pin_high(PIN_SCL)) {
++		if (mach_absolute_time() > i2c_deadline) {
++			i2c_late = true;
++			return false;
++		}
++		__asm__ volatile("yield" ::: "memory");
++	}
++	half_bit();
++	return true;
++}
++
++static bool
++i2c_write(uint8_t byte)
++{
++	int bit;
++	bool ack;
++
++	for (bit = 7; bit >= 0; bit--) {
++		i2c_line(PIN_SDA, ((byte >> bit) & 1u) != 0);
++		half_bit();
++		if (!scl_high_wait()) {
++			return false;
++		}
++		i2c_line(PIN_SCL, false);
++		half_bit();
++	}
++	i2c_line(PIN_SDA, true);
++	half_bit();
++	if (!scl_high_wait()) {
++		return false;
++	}
++	ack = !pin_high(PIN_SDA);
++	i2c_line(PIN_SCL, false);
++	half_bit();
++	return ack;
++}
++
++static uint8_t
++i2c_read(bool ack)
++{
++	uint8_t byte = 0;
++	int bit;
++
++	i2c_line(PIN_SDA, true);
++	for (bit = 7; bit >= 0; bit--) {
++		half_bit();
++		if (!scl_high_wait()) {
++			return 0xffu;
++		}
++		if (pin_high(PIN_SDA)) {
++			byte |= (uint8_t)(1u << bit);
++		}
++		i2c_line(PIN_SCL, false);
++	}
++	i2c_line(PIN_SDA, !ack);
++	half_bit();
++	if (!scl_high_wait()) {
++		return 0xffu;
++	}
++	i2c_line(PIN_SCL, false);
++	half_bit();
++	return byte;
++}
++
++static bool
++reg_read(uint8_t addr, uint8_t reg, uint8_t *val)
++{
++	bool ok;
++	uint64_t limit;
++
++	nanoseconds_to_absolutetime(5000000ULL, &limit);
++	i2c_deadline = mach_absolute_time() + limit;
++	i2c_late = false;
++	if (!bus_take()) {
++		return false;
++	}
++	i2c_start();
++	ok = i2c_write((uint8_t)(addr << 1)) && i2c_write(reg);
++	if (ok) {
++		i2c_start();
++		ok = i2c_write((uint8_t)((addr << 1) | 1u));
++	}
++	if (ok) {
++		*val = i2c_read(false);
++	}
++	i2c_stop();
++	bus_give_back();
++	return ok && !i2c_late;
++}
++
++static bool
++reg_write(uint8_t addr, uint8_t reg, uint8_t val)
++{
++	bool ok;
++	uint64_t limit;
++
++	nanoseconds_to_absolutetime(5000000ULL, &limit);
++	i2c_deadline = mach_absolute_time() + limit;
++	i2c_late = false;
++	if (!bus_take()) {
++		return false;
++	}
++	i2c_start();
++	ok = i2c_write((uint8_t)(addr << 1)) && i2c_write(reg) && i2c_write(val);
++	i2c_stop();
++	bus_give_back();
++	return ok && !i2c_late;
++}
++
++static bool
++reg_write_burst(uint8_t addr, uint8_t reg, const uint8_t *vals, unsigned count)
++{
++	bool ok;
++	uint64_t limit;
++	unsigned i;
++
++	nanoseconds_to_absolutetime(5000000ULL, &limit);
++	i2c_deadline = mach_absolute_time() + limit;
++	i2c_late = false;
++	if (!bus_take()) {
++		return false;
++	}
++	i2c_start();
++	ok = i2c_write((uint8_t)(addr << 1)) && i2c_write(reg);
++	for (i = 0; ok && i < count; i++) {
++		ok = i2c_write(vals[i]);
++	}
++	i2c_stop();
++	bus_give_back();
++	return ok && !i2c_late;
++}
++
++/* ---- Chip helpers ---- */
++
++static void
++amp_sdz(struct tas_amp *a, bool high)
++{
++	uint32_t cfg = rd32(gpio_cfg(a->sdz_pin));
++
++	if (high) {
++		sdz_ever_raised = true;
++	}
++	wr32(gpio_io(a->sdz_pin), high ? 2u : 0u);
++	wr32(gpio_cfg(a->sdz_pin), cfg | CFG_OUTPUT);
++}
++
++static uint8_t
++amp_get(struct tas_amp *a, uint8_t reg)
++{
++	uint8_t v = 0xffu;
++
++	(void)reg_read(a->addr, reg, &v);
++	return v;
++}
++
++static bool
++amp_set(struct tas_amp *a, const char *what, uint8_t reg, uint8_t val)
++{
++	uint8_t back = 0xffu;
++
++	if (!reg_write(a->addr, reg, val) || !reg_read(a->addr, reg, &back) || back != val) {
++		say("vayu-tas256x: %s: %s (%#x <- %#x) failed (reads %#x)\n",
++		    amp_tag(a), what, reg, val, back);
++		return false;
++	}
++	return true;
++}
++
++static bool
++amp_page(struct tas_amp *a, uint8_t page)
++{
++	if (reg_write(a->addr, TAS_PAGE, page) && amp_get(a, TAS_PAGE) == page) {
++		return true;
++	}
++	say("vayu-tas256x: %s: page %#x failed\n", amp_tag(a), page);
++	return false;
++}
++
++static bool
++amp_patch(struct tas_amp *a, const char *what, uint8_t reg, uint8_t clear_bits, uint8_t set_bits)
++{
++	uint8_t v = amp_get(a, reg);
++
++	return amp_set(a, what, reg, (uint8_t)((v & ~clear_bits) | set_bits));
++}
++
++static bool
++amp_burst4(struct tas_amp *a, const char *what, uint8_t reg, const uint8_t *vals)
++{
++	uint8_t back[4];
++	unsigned i;
++	bool same = true;
++
++	if (!reg_write_burst(a->addr, reg, vals, 4)) {
++		say("vayu-tas256x: %s: %s (%#x) write failed\n", amp_tag(a), what, reg);
++		return false;
++	}
++	for (i = 0; i < 4; i++) {
++		back[i] = amp_get(a, (uint8_t)(reg + i));
++		same = same && (back[i] == vals[i]);
++	}
++	if (!same) {
++		say("vayu-tas256x: %s: %s (%#x) mismatch\n", amp_tag(a), what, reg);
++	}
++	return same;
++}
++
++static bool
++amp_write_dvc(struct tas_amp *a, uint32_t index)
++{
++	uint32_t cap = a->tas2564 ? EAR_DVC_DEFAULT : DVC_DEFAULT;
++
++	if (index > cap) {
++		index = cap;
++	}
++	if (!amp_page(a, 2)) {
++		(void)reg_write(a->addr, TAS_PAGE, 0);
++		return false;
++	}
++	if (!amp_burst4(a, "dvc", TAS_DVC, dvc_table[index])) {
++		(void)reg_write(a->addr, TAS_PAGE, 0);
++		return false;
++	}
++	if (!amp_page(a, 0)) {
++		return false;
++	}
++	a->dvc = index;
++	return true;
++}
++
++static bool
++amp_prepare_one(struct tas_amp *a)
++{
++	uint8_t id = 0xffu, v;
++	bool raised = false;
++	bool lim_ready = false;
++	unsigned i;
++
++	a->prepared = false;
++	if (!pin_high(a->sdz_pin)) {
++		a->live = true;
++		amp_sdz(a, true);
++		raised = true;
++		sleep_ms(20);
++	}
++	a->live = true;
++	if (!reg_read(a->addr, TAS_CHIPID, &id) ||
++	    (a->tas2564 ? id != 0x00u : (id != 0x10u && id != 0x20u))) {
++		say("vayu-tas256x: %s: unexpected chip ID %#x\n", amp_tag(a), id);
++		if (raised) {
++			amp_sdz(a, false);
++		}
++		a->live = false;
++		return false;
++	}
++	if (!reg_write(a->addr, TAS_RESET, 1)) {
++		say("vayu-tas256x: %s: sw reset NACK\n", amp_tag(a));
++		amp_sdz(a, false);
++		a->live = false;
++		return false;
++	}
++	sleep_ms(20);
++	if (amp_get(a, TAS_PAGE) != 0 || amp_get(a, TAS_BOOK) != 0) {
++		say("vayu-tas256x: %s: bad page/book after reset\n", amp_tag(a));
++		amp_sdz(a, false);
++		a->live = false;
++		return false;
++	}
++	if (!amp_set(a, "power off", TAS_POWER, TAS_POWER_OFF) ||
++	    !amp_set(a, "misc", TAS_MISC, 0xcfu)) {
++		goto fail;
++	}
++	v = amp_get(a, TAS_TDM0);
++	if (!amp_set(a, "tdm0 48kHz", TAS_TDM0, (uint8_t)((v & ~0x2eu) | 0x08u))) {
++		goto fail;
++	}
++	v = amp_get(a, TAS_TDM1);
++	if (!amp_set(a, "tdm1", TAS_TDM1, (uint8_t)((v & ~0x3fu) | 0x02u))) {
++		goto fail;
++	}
++	v = amp_get(a, TAS_TDM2);
++	if (!amp_set(a, "tdm2 16b", TAS_TDM2, (uint8_t)((v & ~0x3fu) | (a->tas2564 ? 0x10u : 0x20u)))) {
++		goto fail;
++	}
++	v = amp_get(a, TAS_INT_CONFIG);
++	if (!amp_set(a, "clock", TAS_CLOCK_CONFIG, 0x0cu) ||
++	    !amp_set(a, "clock halt", TAS_INT_CONFIG, (uint8_t)(v | 0x38u)) ||
++	    !amp_set(a, "mask0", TAS_MASK0, 0xffu) ||
++	    !amp_set(a, "mask1", TAS_MASK1, 0xffu)) {
++		goto fail;
++	}
++	if (!amp_patch(a, "dcblocker off", TAS_DCBLOCKER, 0, 0x40u) ||
++	    !amp_patch(a, "limiter off", TAS_LIMITER, 0x01u, 0) ||
++	    !amp_patch(a, "bop on", TAS_BOP, 0x12u, 0x01u) ||
++	    !amp_set(a, "tdm4 tx", TAS_TDM4, a->tas2564 ? 0xf1u : 0x11u)) {
++		goto fail;
++	}
++	if (!amp_page(a, TAS_ICN_PAGE)) {
++		(void)reg_write(a->addr, TAS_PAGE, 0);
++		goto fail;
++	}
++	(void)reg_write(a->addr, TAS_ICN_PAGE_CFG, 0x0du);
++	(void)reg_write(a->addr, TAS_CLASSD_CFG1, 0x80u);
++	if (!amp_page(a, 0) || !amp_page(a, 2)) {
++		(void)reg_write(a->addr, TAS_PAGE, 0);
++		goto fail;
++	}
++	if (!amp_burst4(a, "dvc mute", TAS_DVC, dvc_table[0]) ||
++	    !amp_burst4(a, "icn thr", TAS_ICN_THRESHOLD, icn_threshold) ||
++	    !amp_burst4(a, "icn hyst", TAS_ICN_HYSTERESIS, icn_hysteresis)) {
++		(void)reg_write(a->addr, TAS_PAGE, 0);
++		goto fail;
++	}
++	a->dvc = 0;
++	if (!a->tas2564) {
++		lim_ready = true;
++		for (i = 0; i < 5 && lim_ready; i++) {
++			lim_ready = amp_burst4(a, "limiter param", (uint8_t)(0x14u + 4u * i), lim_params[i]);
++		}
++	}
++	if (!amp_page(a, 0)) {
++		goto fail;
++	}
++	if (!a->tas2564) {
++		(void)amp_patch(a, "boost vltg", 0x34u, 0x0fu, 0x0bu);
++		(void)amp_patch(a, "boost ilim", 0x40u, 0x3fu, 0x36u);
++		(void)amp_patch(a, "vbat filter", 0x3bu, 0x60u, 0x40u);
++		if (lim_ready) {
++			if (!amp_patch(a, "lim rel", 0x13u, 0xf8u, 0x70u) ||
++			    !amp_patch(a, "lim atk", TAS_LIMITER, 0x3fu, 0x13u)) {
++				(void)amp_patch(a, "lim off", TAS_LIMITER, 0x01u, 0);
++			}
++		}
++	} else {
++		if (!amp_patch(a, "rx mode", TAS_PLAYBACK0, 0, 0x80u) ||
++		    !amp_page(a, TAS_ICN_PAGE)) {
++			(void)reg_write(a->addr, TAS_PAGE, 0);
++			goto fail;
++		}
++		if (!reg_write(a->addr, TAS_TEST_PAGE_LOCK, 0x0du) ||
++		    !reg_write(a->addr, TAS_DAC_MODULATOR, 0xc0u) ||
++		    !reg_write(a->addr, TAS_ICN_IMPROVE, 0x1fu) ||
++		    !reg_write(a->addr, TAS_CLASSD_CFG2, 0x08u)) {
++			(void)reg_write(a->addr, TAS_PAGE, 0);
++			goto fail;
++		}
++		if (!amp_page(a, 0) ||
++		    !amp_set(a, "rx misc", TAS_MISC, 0xcau) ||
++		    !amp_set(a, "icn sw off", TAS_ICN_SW, 0x00u) ||
++		    !amp_patch(a, "ear 16dBV", TAS_PLAYBACK0, 0x3eu, 0x1au)) {
++			goto fail;
++		}
++	}
++	(void)reg_write(a->addr, TAS_INT_CONFIG, (uint8_t)(amp_get(a, TAS_INT_CONFIG) | 0x04u));
++	say("vayu-tas256x: %s prepared (ID %#x, latched %#x %#x)\n",
++	    amp_tag(a), id, amp_get(a, TAS_LATCHED0), amp_get(a, TAS_LATCHED1));
++	a->prepared = true;
++	return true;
++fail:
++	(void)reg_write(a->addr, TAS_POWER, TAS_POWER_OFF);
++	amp_sdz(a, false);
++	a->live = false;
++	return false;
++}
++
++static bool
++amp_start_one(struct tas_amp *a)
++{
++	uint8_t v;
++
++	if (!amp_set(a, "power on", TAS_POWER, TAS_POWER_ON_IV)) {
++		return false;
++	}
++	sleep_ms(20);
++	if (!amp_page(a, 1)) {
++		goto fail;
++	}
++	v = amp_get(a, TAS_MISC_CLASSD);
++	if (!amp_set(a, "cmp hyst", TAS_MISC_CLASSD, (uint8_t)(v | TAS_CMP_HYST)) ||
++	    !amp_page(a, 0)) {
++		goto fail;
++	}
++	return true;
++fail:
++	(void)reg_write(a->addr, TAS_PAGE, 0);
++	(void)reg_write(a->addr, TAS_POWER, TAS_POWER_OFF);
++	amp_sdz(a, false);
++	a->live = false;
++	a->prepared = false;
++	return false;
++}
++
++static void
++amp_stop_one(struct tas_amp *a)
++{
++	uint8_t v;
++
++	if (!a->live) {
++		return;
++	}
++	if (amp_page(a, 1)) {
++		v = amp_get(a, TAS_MISC_CLASSD);
++		(void)amp_set(a, "cmp hyst off", TAS_MISC_CLASSD, (uint8_t)(v & ~TAS_CMP_HYST));
++	}
++	(void)reg_write(a->addr, TAS_PAGE, 0);
++	(void)reg_write(a->addr, TAS_POWER, TAS_POWER_OFF);
++	sleep_ms(20);
++	say("vayu-tas256x: %s stopped (power %#x, latched %#x %#x)\n",
++	    amp_tag(a), amp_get(a, TAS_POWER), amp_get(a, TAS_LATCHED0), amp_get(a, TAS_LATCHED1));
++	amp_sdz(a, false);
++	a->live = false;
++	a->prepared = false;
++	a->dvc = 0;
++}
++
++static bool
++amp_fault_one(struct tas_amp *a)
++{
++	uint8_t l0 = amp_get(a, TAS_LATCHED0);
++	uint8_t l1 = amp_get(a, TAS_LATCHED1);
++
++	if (l0 == 0xffu || l1 == 0xffu || (l0 & TAS_FAULTS0) || (l1 & TAS_FAULTS1)) {
++		say("vayu-tas256x: FAULT in %s (latched %#x %#x)\n", amp_tag(a), l0, l1);
++		return true;
++	}
++	return false;
++}
++
++/* ---- Public speaker interface (called from hakios.cs35l41.c dispatch) ---- */
++
++static void
++probe_thread(__unused void *arg, __unused wait_result_t wr)
++{
++	struct tas_amp *list[2];
++	unsigned i;
++
++	list[0] = &amp_bottom;
++	list[1] = &amp_ear;
++
++	lck_mtx_lock(&tas_lock);
++	if (!ensure_tlmm()) {
++		say("vayu-tas256x: TLMM map failed\n");
++		lck_mtx_unlock(&tas_lock);
++		thread_terminate(current_thread());
++	}
++	if (probe_level >= 2) {
++		for (i = 0; i < 2; i++) {
++			uint8_t page = 0xffu, book = 0xffu, id = 0xffu;
++			bool was_high = pin_high(list[i]->sdz_pin);
++
++			if (!was_high) {
++				amp_sdz(list[i], true);
++				sleep_ms(20);
++			}
++			if (reg_read(list[i]->addr, TAS_PAGE, &page) &&
++			    reg_read(list[i]->addr, TAS_BOOK, &book) &&
++			    page == 0 && book == 0 &&
++			    reg_read(list[i]->addr, TAS_CHIPID, &id)) {
++				say("vayu-tas256x: probe %s chip ID %#x\n", amp_tag(list[i]), id);
++			} else {
++				say("vayu-tas256x: probe %s no answer (page %#x book %#x)\n",
++				    amp_tag(list[i]), page, book);
++			}
++			amp_sdz(list[i], false);
++		}
++	} else {
++		say("vayu-tas256x: probe=1 SDZ bottom=%u ear=%u\n",
++		    pin_high(PIN_SDZ_RIGHT), pin_high(PIN_SDZ_LEFT));
++	}
++	lck_mtx_unlock(&tas_lock);
++	thread_terminate(current_thread());
++}
++
++void
++vayu_tas256x_init(void)
++{
++	thread_t thread;
++
++	PE_parse_boot_argn("vayu_audio_ear", &ear_enabled, sizeof(ear_enabled));
++	if (!PE_parse_boot_argn("speaker_probe", &probe_level, sizeof(probe_level)) || probe_level == 0) {
++		return;
++	}
++	probe_level = probe_level > 2 ? 2 : probe_level;
++	if (kernel_thread_start(probe_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	}
++}
++
++bool
++vayu_tas256x_prepare(void)
++{
++	bool ok;
++
++	lck_mtx_lock(&tas_lock);
++	if (broken || !ensure_tlmm()) {
++		lck_mtx_unlock(&tas_lock);
++		return false;
++	}
++	ok = amp_prepare_one(&amp_bottom);
++	if (!ok) {
++		broken = true;
++		lck_mtx_unlock(&tas_lock);
++		return false;
++	}
++	if (ear_enabled) {
++		if (!amp_prepare_one(&amp_ear)) {
++			say("vayu-tas256x: earpiece 0x4d unavailable, continuing with bottom speaker\n");
++		}
++	}
++	lck_mtx_unlock(&tas_lock);
++	return true;
++}
++
++bool
++vayu_tas256x_start(void)
++{
++	bool ok;
++
++	lck_mtx_lock(&tas_lock);
++	if (broken || !ensure_tlmm()) {
++		lck_mtx_unlock(&tas_lock);
++		return false;
++	}
++	if (!amp_bottom.prepared) {
++		if (!amp_prepare_one(&amp_bottom)) {
++			broken = true;
++			lck_mtx_unlock(&tas_lock);
++			return false;
++		}
++		if (ear_enabled && !amp_ear.prepared) {
++			(void)amp_prepare_one(&amp_ear);
++		}
++	}
++	ok = amp_start_one(&amp_bottom);
++	if (!ok) {
++		amp_stop_one(&amp_ear);
++		broken = true;
++		lck_mtx_unlock(&tas_lock);
++		return false;
++	}
++	if (ear_enabled && amp_ear.prepared) {
++		if (!amp_start_one(&amp_ear)) {
++			say("vayu-tas256x: earpiece start failed, continuing with bottom speaker\n");
++		}
++	}
++	say("vayu-tas256x: STARTED (bottom=%d ear=%d)\n", amp_bottom.live, amp_ear.live);
++	lck_mtx_unlock(&tas_lock);
++	return true;
++}
++
++static bool
++ramp_amp_dvc(struct tas_amp *a, uint32_t target, uint32_t step_ms)
++{
++	while (a->dvc != target) {
++		uint32_t next = a->dvc < target ? a->dvc + 1u : a->dvc - 1u;
++
++		if (!amp_write_dvc(a, next)) {
++			return false;
++		}
++		if (step_ms > 0 && a->dvc != target) {
++			sleep_ms(step_ms > 10u ? 10u : step_ms);
++		}
++	}
++	return true;
++}
++
++bool
++vayu_tas256x_volume(uint32_t below, uint32_t step_ms)
++{
++	uint32_t steps;
++	uint32_t target_bot, target_ear;
++	bool ok;
++
++	lck_mtx_lock(&tas_lock);
++	if (broken || !amp_bottom.live) {
++		lck_mtx_unlock(&tas_lock);
++		return false;
++	}
++	steps = (below == HAKIOS_GUARD_SILENT) ? 0xffu : (below + 8u) / 16u;
++	target_bot = (steps >= DVC_DEFAULT) ? 0u : DVC_DEFAULT - steps;
++	target_ear = (steps >= EAR_DVC_DEFAULT) ? 0u : EAR_DVC_DEFAULT - steps;
++	if (step_ms == 0) {
++		ok = amp_write_dvc(&amp_bottom, target_bot);
++		if (ok && amp_ear.live) {
++			(void)amp_write_dvc(&amp_ear, target_ear);
++		}
++	} else {
++		ok = ramp_amp_dvc(&amp_bottom, target_bot, step_ms);
++		if (ok && amp_ear.live) {
++			(void)ramp_amp_dvc(&amp_ear, target_ear, step_ms);
++		}
++	}
++	lck_mtx_unlock(&tas_lock);
++	return ok;
++}
++
++bool
++vayu_tas256x_healthy(void)
++{
++	bool fault = false;
++
++	lck_mtx_lock(&tas_lock);
++	if (broken) {
++		lck_mtx_unlock(&tas_lock);
++		return false;
++	}
++	if (amp_bottom.live && amp_fault_one(&amp_bottom)) {
++		fault = true;
++	}
++	if (amp_ear.live && amp_fault_one(&amp_ear)) {
++		fault = true;
++	}
++	if (fault) {
++		if (amp_bottom.live) {
++			(void)reg_write(amp_bottom.addr, TAS_POWER, TAS_POWER_OFF);
++			amp_sdz(&amp_bottom, false);
++			amp_bottom.live = false;
++			amp_bottom.prepared = false;
++		}
++		if (amp_ear.live) {
++			(void)reg_write(amp_ear.addr, TAS_POWER, TAS_POWER_OFF);
++			amp_sdz(&amp_ear, false);
++			amp_ear.live = false;
++			amp_ear.prepared = false;
++		}
++		broken = true;
++	}
++	lck_mtx_unlock(&tas_lock);
++	return !fault;
++}
++
++uint32_t
++vayu_tas256x_monitor(__unused bool tell)
++{
++	return 0;
++}
++
++void
++vayu_tas256x_stop(void)
++{
++	lck_mtx_lock(&tas_lock);
++	amp_stop_one(&amp_bottom);
++	amp_stop_one(&amp_ear);
++	lck_mtx_unlock(&tas_lock);
++}
++
++void
++vayu_tas256x_quiesce(void)
++{
++	if (!sdz_ever_raised || tlmm_north == 0) {
++		return;
++	}
++	amp_sdz(&amp_bottom, false);
++	amp_sdz(&amp_ear, false);
++	amp_bottom.live = false;
++	amp_bottom.prepared = false;
++	amp_ear.live = false;
++	amp_ear.prepared = false;
++}
