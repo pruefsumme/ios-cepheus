@@ -103,10 +103,10 @@ index 01ce774..06b54a7 100644
  			ud_sleep_ms(500);       /* let the log go out */
 diff --git a/bsd/dev/vayu_haptic.c b/bsd/dev/vayu_haptic.c
 new file mode 100644
-index 0000000..37f3449
+index 0000000..b41caf8
 --- /dev/null
 +++ b/bsd/dev/vayu_haptic.c
-@@ -0,0 +1,1341 @@
+@@ -0,0 +1,1342 @@
 +/*
 + * The vibration motor of the POCO X3 Pro (vayu, SM8150-AC): the haptics block of the PM8150B
 + * (SPMI slave 3, registers 0xc000), bsd/dev/vayu_haptic.c.
@@ -1099,6 +1099,7 @@ index 0000000..37f3449
 +			if (peak > heard_peak) {
 +				heard_peak = peak;
 +			}
++		}
 +	}
 +	return error;
 +}

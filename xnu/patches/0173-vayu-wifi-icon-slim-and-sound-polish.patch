@@ -74,7 +74,7 @@ index a4db125..17a88b2 100644
  			return false;
  		}
 diff --git a/bsd/dev/redwood_sta.c b/bsd/dev/redwood_sta.c
-index f4e0490..003c26d 100644
+index f4e0490..8dbd3f5 100644
 --- a/bsd/dev/redwood_sta.c
 +++ b/bsd/dev/redwood_sta.c
 @@ -17,6 +17,7 @@
@@ -85,7 +85,15 @@ index f4e0490..003c26d 100644
  #include <kern/kalloc.h>
  #include <kern/locks.h>
  #include <kern/sched_prim.h>
-@@ -130,7 +131,7 @@ sta_runs(__unused void *parameter, __unused wait_result_t result)
+@@ -29,6 +30,7 @@
+ #include <sys/systm.h>
+ 
+ extern void thread_set_thread_name(thread_t thread, const char *name);
++extern kern_return_t thread_terminate(thread_t thread);
+ 
+ #define HEARD_MOST      128
+ #define CHANNELS_MOST   96
+@@ -130,7 +132,7 @@ sta_runs(__unused void *parameter, __unused wait_result_t result)
  			bzero(&join, sizeof(join));
  			redwood_apple80211_event(REDWOOD_STA_JOIN_DONE, error);
  			if (error == 0) {
@@ -94,7 +102,7 @@ index f4e0490..003c26d 100644
  			}
  			/* a join that did not come through (a wrong passphrase) leaves things as they were: the standing network again */
  			lck_mtx_lock(&sta_lock);
-@@ -199,6 +200,37 @@ redwood_sta_attach(const struct redwood_sta_ops *ops)
+@@ -199,6 +201,37 @@ redwood_sta_attach(const struct redwood_sta_ops *ops)
  	redwood_apple80211_event(REDWOOD_STA_POWER, 1);
  }
  
