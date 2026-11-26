@@ -217,10 +217,10 @@ index 571c890..a4db125 100644
  	struct {
 diff --git a/bsd/dev/vayu_tas256x.c b/bsd/dev/vayu_tas256x.c
 new file mode 100644
-index 0000000..ea7ab43
+index 0000000..9342894
 --- /dev/null
 +++ b/bsd/dev/vayu_tas256x.c
-@@ -0,0 +1,972 @@
+@@ -0,0 +1,968 @@
 +/*
 + * Speaker amplifiers for Poco X3 Pro (vayu, SM8150-AC):
 + *   0x4c: TI TAS2562 (bottom speaker, right channel), SDZ GPIO 92 (north)
@@ -439,11 +439,7 @@ index 0000000..ea7ab43
 +static void
 +sleep_ms(unsigned ms)
 +{
-+	uint64_t deadline;
-+
-+	clock_interval_to_deadline(ms, NSEC_PER_MSEC, &deadline);
-+	(void)assert_wait_deadline((event_t)&taken_cfg, THREAD_UNINT, deadline);
-+	thread_block(THREAD_CONTINUE_NULL);
++	delay_for_interval(ms, NSEC_PER_MSEC);
 +}
 +
 +static bool
