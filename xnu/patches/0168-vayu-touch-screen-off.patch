@@ -1,0 +1,103 @@
+diff --git a/bsd/dev/vayu_nvt.c b/bsd/dev/vayu_nvt.c
+index 35b212a..c642fad 100644
+--- a/bsd/dev/vayu_nvt.c
++++ b/bsd/dev/vayu_nvt.c
+@@ -54,6 +54,7 @@
+ #include "vayu_nvt_fw.h"
+ 
+ extern vm_offset_t ml_io_map_unmappable(vm_offset_t, vm_size_t, unsigned int);
++extern volatile uint32_t sweet_fb_display_off;
+ extern void sweet_hid_touch(int finger, int down, int x, int y);
+ extern const uint8_t *hakios_adsp_fw_file(const char *name, uint64_t *size);
+ extern void hakios_adsp_fw_free(const uint8_t *data, uint64_t size);
+@@ -131,7 +132,7 @@ void vayu_nvt_init(void);
+ static struct {
+ 	vm_offset_t south, north;
+ 	bool started;
+-	int log, poll;
++	int log, poll, screenoff;
+ 	bool down[NVT_FINGERS];
+ 	int x[NVT_FINGERS], y[NVT_FINGERS];
+ } nvt;
+@@ -483,6 +484,17 @@ nvt_any_down(void)
+ 	return false;
+ }
+ 
++static void
++nvt_release_all(void)
++{
++	for (unsigned f = 0; f < NVT_FINGERS; f++) {
++		if (nvt.down[f]) {
++			nvt.down[f] = false;
++			sweet_hid_touch((int)f, 0, nvt.x[f], nvt.y[f]);
++		}
++	}
++}
++
+ /*
+  * Read a report on every INT edge. Without one, still read every 50 ms
+  * while a finger is down (a missed edge must not leave a finger stuck) and
+@@ -492,13 +504,33 @@ static void
+ nvt_run(const uint8_t *fw, const struct nvt_part *parts, int nparts)
+ {
+ 	unsigned crash_frames = 0, since_read = 0;
++	bool was_off = false;
+ 
+ 	if (!nvt.poll) {
+ 		nvt_int_latch_setup();
+ 	}
+ 	for (;;) {
+ 		unsigned wait = nvt.poll ? NVT_POLL_MS : NVT_INT_CHECK_MS;
+-		bool due = nvt.poll || nvt_int_pending() ||
++		bool due;
++
++		if (nvt.screenoff && sweet_fb_display_off) {
++			if (!was_off) {
++				nvt_release_all();
++				printf("VAYU NVT: display off, touch paused\n");
++				was_off = true;
++			}
++			nvt_msleep(50);
++			continue;
++		}
++		if (was_off) {
++			if (!nvt.poll) {
++				nvt_wr32(nvt.south, NVT_GPIO_INTR_STATUS(NVT_PIN_INT), 0);
++			}
++			since_read = 0;
++			was_off = false;
++			printf("VAYU NVT: display on, touch resumed\n");
++		}
++		due = nvt.poll || nvt_int_pending() ||
+ 		    since_read >= (nvt_any_down() ? NVT_HELD_READ_MS : NVT_IDLE_READ_MS);
+ 
+ 		if (!due) {
+@@ -583,6 +615,8 @@ vayu_nvt_init(void)
+ 	PE_parse_boot_argn("vayutouch", &enabled, sizeof(enabled));
+ 	PE_parse_boot_argn("vayutouchlog", &nvt.log, sizeof(nvt.log));
+ 	PE_parse_boot_argn("vayutouchpoll", &nvt.poll, sizeof(nvt.poll));
++	nvt.screenoff = 1;
++	PE_parse_boot_argn("vayutouch_screenoff", &nvt.screenoff, sizeof(nvt.screenoff));
+ 	if (!enabled) {
+ 		printf("VAYU NVT: disabled (vayutouch=0)\n");
+ 		return;
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 7204953..97d3890 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -121,6 +121,7 @@ static int sweet_fb_fade = 1;
+  * like TWRP's fts_drm_state_chg_callback after DSI_CMD_SET_ON.
+  */
+ extern "C" volatile uint32_t sweet_fb_display_on_count = 0;
++extern "C" volatile uint32_t sweet_fb_display_off = 0;
+ 
+ class IOMobileFramebuffer : public IOService {
+ 	OSDeclareDefaultStructors(IOMobileFramebuffer);
+@@ -1566,6 +1567,7 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMetho
+ 				fFB->fFadeStep = 0;
+ 				fFB->fDirty = true;     /* on: redraw the latest frame */
+ 			}
++			sweet_fb_display_off = off ? 1u : 0u;
+ 			IOLockUnlock(fFB->fLock);
+ 			if (!off) {
+ 				/* sweetbl=2: give CoreBrightness a backlight only once the display is up */

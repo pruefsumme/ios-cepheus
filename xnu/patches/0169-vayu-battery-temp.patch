@@ -1,0 +1,82 @@
+diff --git a/bsd/dev/sweet_spmi.c b/bsd/dev/sweet_spmi.c
+index 8b8cf1e..b2c6050 100644
+--- a/bsd/dev/sweet_spmi.c
++++ b/bsd/dev/sweet_spmi.c
+@@ -119,9 +119,9 @@ sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out)
+ 			return -1;
+ 		}
+ 	} else if (sid == SP_USID_PM8150B) {
+-		/* CHGR/DCDC/BATIF/USBIN and FG batt-soc/batt-info. */
++		/* CHGR/DCDC/BATIF/USBIN, FG batt-soc/batt-info and FG RRADC. */
+ 		if (!((peripheral >= 0x10 && peripheral <= 0x13) ||
+-		    peripheral == 0x40 || peripheral == 0x41)) {
++		    peripheral == 0x40 || peripheral == 0x41 || peripheral == 0x42)) {
+ 			return -1;
+ 		}
+ 	} else if (!sp_is_wled(sid, peripheral)) {
+diff --git a/iokit/Kernel/arm/SweetBattery.cpp b/iokit/Kernel/arm/SweetBattery.cpp
+index 2ab3d8b..22957df 100644
+--- a/iokit/Kernel/arm/SweetBattery.cpp
++++ b/iokit/Kernel/arm/SweetBattery.cpp
+@@ -32,6 +32,9 @@ extern "C" int sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out);
+ #define FG_BATT_MISSING_HW   0x04
+ #define FG_BATT_TEMP_LSB     0x4150
+ #define FG_BATT_TEMP_MSB     0x4151
++#define FG_RRADC_SUBTYPE     0x4205
++#define FG_RRADC_TEMP_LSB    0x4288
++#define FG_RRADC_TEMP_MSB    0x4289
+ #define FG_BATT_VBATT_LSB    0x41a0
+ #define FG_BATT_VBATT_CP     0x41a6
+ #define FG_BATT_IBATT_LSB    0x41a2
+@@ -54,6 +57,7 @@ private:
+ 	IOTimerEventSource *fTimer;
+ 	bool fTimerAdded, fRunning, fReal, fCepheus, fHaveSample;
+ 	unsigned fDesignMah;
++	unsigned fSampleLogs;
+ 	int fLastMode;
+ 	void putNumber(const char *key, UInt32 value);
+ 	void putBool(const char *key, bool value);
+@@ -89,6 +93,7 @@ SweetBattery::init(OSDictionary *dictionary)
+ 	fTimer = NULL;
+ 	fTimerAdded = fRunning = fReal = fCepheus = fHaveSample = false;
+ 	fDesignMah = 5020;
++	fSampleLogs = 0;
+ 	if (dictionary) {
+ 		OSCollectionIterator *it = OSCollectionIterator::withCollection(dictionary);
+ 		if (!it) {
+@@ -415,6 +420,20 @@ SweetBattery::pollCepheus(void)
+ 			tempValid = true;
+ 		}
+ 	}
++	if (!tempValid) {
++		uint8_t rrSub = 0;
++		if (readByte(PM8150B_USID, FG_RRADC_SUBTYPE, &rrSub) && rrSub == 0x13 &&
++		    readByte(PM8150B_USID, FG_RRADC_TEMP_LSB, &tempLsb) &&
++		    readByte(PM8150B_USID, FG_RRADC_TEMP_MSB, &tempMsb)) {
++			int raw = ((int)(tempMsb & 0x03u) << 8) | tempLsb;
++			rawTempOut = (unsigned)raw;
++			int degC = (raw & 0x200) ? raw - 1024 : raw;
++			if (raw != 0 && degC >= -20 && degC <= 70) {
++				tempCenti = degC * 100;
++				tempValid = true;
++			}
++		}
++	}
+ 
+ 	bool external = false, capable = false, charging = false, full = false;
+ 	uint8_t usbin = 0, path = 0, charger = 0, error = 0, thermal = 0;
+@@ -456,10 +475,11 @@ SweetBattery::pollCepheus(void)
+ 	putNumber("SweetBatteryRawTemp", rawTempOut);
+ 	putNumber("SweetBatterySocReady", socValid);
+ 	putNumber("SweetBatteryChargerState", statusValid ? (charger & 7u) : 0xffu);
+-	if (!fHaveSample) {
+-		IOLog("SWEET BATTERY: FG sample msoc=%u ready=%d percent=%u vbatt=%u mV ibatt=%d mA temp=%d charger=%#x\n",
++	if (fSampleLogs < 2) {
++		fSampleLogs++;
++		IOLog("SWEET BATTERY: FG sample msoc=%u ready=%d percent=%u vbatt=%u mV ibatt=%d mA temp=%d rawTemp=%#x charger=%#x\n",
+ 		    (unsigned)msoc, socValid, percent, mv, ma, tempCenti,
+-		    (unsigned)charger);
++		    rawTempOut, (unsigned)charger);
+ 	}
+ 	fHaveSample = true;
+ 	publish(percent, mv, ma, external, capable, charging, full,
