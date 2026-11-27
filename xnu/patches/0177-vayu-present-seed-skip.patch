@@ -1,0 +1,81 @@
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index d1488c0..e0e1c58 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -114,6 +114,7 @@ static int sweet_fb_async_log;
+  * (vayu) the CPU-drawn steps show as black bands creeping over the screen.
+  */
+ static int sweet_fb_fade = 1;
++static int sweet_fb_seedskip = 1;
+ 
+ /*
+  * 0141: bumped by kSweetFBRequestPowerChange when the display turns on.
+@@ -895,6 +896,7 @@ AppleCLCD::start(IOService *provider)
+ 	PE_parse_boot_argn("sweetfb_sel_log", &sweet_fb_sel_log, sizeof(sweet_fb_sel_log));
+ 	PE_parse_boot_argn("sweetfb_async_log", &sweet_fb_async_log, sizeof(sweet_fb_async_log));
+ 	PE_parse_boot_argn("sweetfb_fade", &sweet_fb_fade, sizeof(sweet_fb_fade));
++	PE_parse_boot_argn("sweetfb_seedskip", &sweet_fb_seedskip, sizeof(sweet_fb_seedskip));
+ 	fFlushTicks = (hz == 0 || hz >= 60) ? 1 : 60 / hz;
+ 	fVsync->setTimeoutUS(SWEET_FB_VSYNC_US);
+ 
+@@ -1208,9 +1210,17 @@ AppleCLCD::presentGPU(const uint8_t *rec)
+ 		IOLockUnlock(fLock);
+ 		IOLog("SWEET FB: frames now scaled to fit by the GPU (panel stride %u)\n", fRowBytes);
+ 	}
++	uint32_t seed = s->currentSeed();
++	bool needClean = !sweet_fb_seedskip || s->state == NULL ||
++	    !s->cleanSeedValid || s->lastCleanSeed != seed;
++	uintptr_t kva = needClean ? s->kernelAddress() : 0;
+ 	uint32_t dx = 0, dy = 0, dw = 0, dh = 0;
+-	int rc = sweet_gpu_present(slot, s->kernelAddress(), s->offset, s->width, s->height, s->bytesPerRow,
++	int rc = sweet_gpu_present(slot, kva, s->offset, s->width, s->height, s->bytesPerRow,
+ 	    fRowBytes, fCornerRadius, &dx, &dy, &dw, &dh);
++	if (rc == 0 && kva != 0 && s->state != NULL) {
++		s->lastCleanSeed = seed;
++		s->cleanSeedValid = true;
++	}
+ 	s->release();
+ 	if (rc) {
+ 		return gpu_fallback(7, "GPU blit failed");
+diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.cpp
+index 3e703d3..e813036 100644
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -110,6 +110,12 @@ sweet_surface_seed(SweetSurface *s)
+ 	return (uint32_t *)((uint8_t *)s->state->getBytesNoCopy() + SWEET_SURFACE_STATE_SEED);
+ }
+ 
++uint32_t
++SweetSurface::currentSeed()
++{
++	return state != NULL ? *sweet_surface_seed(this) : 0;
++}
++
+ /*
+  * Give the surface an id and a table slot; the table holds one retain and a
+  * user count (creators, client mappings, kernel holders). Lock held.
+diff --git a/iokit/Kernel/arm/SweetSurface.h b/iokit/Kernel/arm/SweetSurface.h
+index fbcdfac..5f3af73 100644
+--- a/iokit/Kernel/arm/SweetSurface.h
++++ b/iokit/Kernel/arm/SweetSurface.h
+@@ -39,12 +39,19 @@ public:
+ 	IOOptionBits              mapCache;     /* cache mode for user mappings */
+ 	IOBufferMemoryDescriptor *state;        /* shared state page, read-only for users */
+ 	IOMemoryMap              *kernelMap;    /* lazily created for kernel copies */
++	uint32_t                  lastCleanSeed;
++	bool                      cleanSeedValid;
+ 
+-	bool init() APPLE_KEXT_OVERRIDE { return OSObject::init(); }
++	bool init() APPLE_KEXT_OVERRIDE {
++		lastCleanSeed = 0;
++		cleanSeedValid = false;
++		return OSObject::init();
++	}
+ 	void free() APPLE_KEXT_OVERRIDE;
+ 
+ 	/* Kernel address of the pixels (mapped on first use), or 0. */
+ 	uintptr_t kernelAddress();
++	uint32_t  currentSeed();
+ };
+ 
+ /* Retained surface for an id, or NULL. */
