@@ -1,0 +1,194 @@
+diff --git a/bsd/dev/sweet_cpufreq.c b/bsd/dev/sweet_cpufreq.c
+index 46cd09b..4e50cb5 100644
+--- a/bsd/dev/sweet_cpufreq.c
++++ b/bsd/dev/sweet_cpufreq.c
+@@ -13,9 +13,11 @@
+ #include <sys/systm.h>
+ #include <machine/machine_routines.h>
+ #include <pexpert/pexpert.h>
++#include <vm/memory_types.h>
+ 
+-extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++extern vm_offset_t ml_io_map_unmappable(vm_offset_t, vm_size_t, unsigned int);
+ void sweet_cpufreq_init(void);
++void sweet_cpufreq_set_screen_off(int off);
+ 
+ #define OSM_FREQ_REG    0x110u          /* + 32 * index */
+ #define OSM_ROW         32u
+@@ -32,6 +34,12 @@ static const struct {
+ 	{"perfpcl (A76 prime)", 0x18327800u},
+ };
+ 
++static vm_offset_t osm_base[3];
++static unsigned osm_active_idx[3], osm_active_mhz[3];
++static unsigned osm_idle_idx[3], osm_idle_mhz[3];
++static bool osm_ready[3];
++static int cpuidle_en = 1;
++
+ static uint32_t
+ osm_rd(vm_offset_t base, uint32_t off)
+ {
+@@ -40,19 +48,30 @@ osm_rd(vm_offset_t base, uint32_t off)
+ 	return v;
+ }
+ 
++static void
++osm_wr_desired(vm_offset_t base, uint32_t idx)
++{
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*(volatile uint32_t *)(base + OSM_DESIRED) = idx;
++	__asm__ volatile("dsb osh" ::: "memory");
++}
++
+ void
+ sweet_cpufreq_init(void)
+ {
+ 	unsigned want = 1;
+ 	(void)PE_parse_boot_argn("cepheuscpufreq", &want, sizeof(want));
++	(void)PE_parse_boot_argn("sweetcpuidle", &cpuidle_en, sizeof(cpuidle_en));
+ 	for (unsigned c = 0; c < sizeof(osm_clusters) / sizeof(osm_clusters[0]); ++c) {
+-		vm_offset_t base = ml_io_map(osm_clusters[c].pa, 0x1000);
++		vm_offset_t base = ml_io_map_unmappable(osm_clusters[c].pa, 0x1000, VM_WIMG_IO);
+ 		if (!base) {
+ 			printf("SWEET CPUFREQ: %s: map failed\n", osm_clusters[c].name);
+ 			continue;
+ 		}
++		osm_base[c] = base;
+ 		uint32_t cur = osm_rd(base, OSM_DESIRED);
+ 		unsigned best = cur, best_khz = 0, prev_khz = 0, n = 0;
++		unsigned idle_idx = 0, idle_khz = ~0u;
+ 		char line[256];
+ 		unsigned len = 0;
+ 		for (unsigned i = 0; i < OSM_ROWS; ++i) {
+@@ -69,7 +88,14 @@ sweet_cpufreq_init(void)
+ 				    cores == 1 ? "*" : "");
+ 			}
+ 			/* core count 1 = single-core boost entry: skip, as Linux does */
+-			if (cores == 1 || (want > 1 && khz / 1000 > want)) {
++			if (cores == 1) {
++				continue;
++			}
++			if (khz < idle_khz) {
++				idle_khz = khz;
++				idle_idx = i;
++			}
++			if (want > 1 && khz / 1000 > want) {
+ 				continue;
+ 			}
+ 			if (khz > best_khz) {
+@@ -82,11 +108,50 @@ sweet_cpufreq_init(void)
+ 			printf("SWEET CPUFREQ: %s index %u kept\n", osm_clusters[c].name, cur);
+ 			continue;
+ 		}
+-		__asm__ volatile("dmb oshst" ::: "memory");
+-		*(volatile uint32_t *)(base + OSM_DESIRED) = best;
+-		__asm__ volatile("dsb osh" ::: "memory");
+-		printf("SWEET CPUFREQ: %s index %u -> %u (%u MHz), reads back %u\n",
+-		    osm_clusters[c].name, cur, best, best_khz / 1000, osm_rd(base, OSM_DESIRED));
++		osm_wr_desired(base, best);
++		osm_active_idx[c] = best;
++		osm_active_mhz[c] = best_khz / 1000;
++		if (idle_khz != ~0u && idle_idx < n) {
++			osm_idle_idx[c] = idle_idx;
++			osm_idle_mhz[c] = idle_khz / 1000;
++		} else {
++			osm_idle_idx[c] = best;
++			osm_idle_mhz[c] = best_khz / 1000;
++		}
++		osm_ready[c] = true;
++		printf("SWEET CPUFREQ: %s index %u -> %u (%u MHz), idle %u (%u MHz), reads back %u\n",
++		    osm_clusters[c].name, cur, best, best_khz / 1000,
++		    osm_idle_idx[c], osm_idle_mhz[c], osm_rd(base, OSM_DESIRED));
++	}
++}
++
++void
++sweet_cpufreq_set_screen_off(int off)
++{
++	static int last_off = -1;
++	static unsigned logs;
++	unsigned mhz[3];
++	unsigned idx[3];
++	unsigned c;
++
++	if (!cpuidle_en || off == last_off) {
++		return;
++	}
++	last_off = off;
++	for (c = 0; c < 3; ++c) {
++		if (osm_ready[c] && osm_base[c]) {
++			idx[c] = off ? osm_idle_idx[c] : osm_active_idx[c];
++			mhz[c] = off ? osm_idle_mhz[c] : osm_active_mhz[c];
++			osm_wr_desired(osm_base[c], idx[c]);
++		} else {
++			idx[c] = 0;
++			mhz[c] = 0;
++		}
++	}
++	if (logs < 16) {
++		logs++;
++		printf("SWEET CPUFREQ: screen %s -> A55 %u MHz (%u), A76 %u MHz (%u), Prime %u MHz (%u)\n",
++		    off ? "off" : "on", mhz[0], idx[0], mhz[1], idx[1], mhz[2], idx[2]);
+ 	}
+ }
+ #endif /* ARM64_BOARD_CONFIG_SWEET */
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+index c49ad24..7db9a6d 100644
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -904,6 +904,8 @@ extern void vayu_haptic_test_tap(uint32_t ms);
+ extern void vayu_haptic_quiesce(void);
+ extern void vayu_torch_set(uint32_t permille);
+ extern void vayu_torch_quiesce(void);
++extern int sweet_spmi_init(void);
++extern int sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out);
+ 
+ static int
+ ud_num(const char **p)
+@@ -1024,6 +1026,26 @@ ud_cmd_thread(void *arg __unused, wait_result_t wr __unused)
+ 			}
+ 			continue;
+ 		}
++		if (strncmp(cmd, "batt", 4) == 0) {
++			static const unsigned regs[8] = {
++				0x1006u, 0x1007u, 0x110bu, 0x1306u,
++				0x1307u, 0x1309u, 0x1310u, 0x1342u
++			};
++			uint8_t v[8];
++			int rc;
++			unsigned i;
++
++			bzero(v, sizeof(v));
++			rc = sweet_spmi_init();
++			for (i = 0; i < 8 && rc == 0; ++i) {
++				if (sweet_spmi_read(2u, regs[i], &v[i]) != 0) {
++					rc = -1;
++				}
++			}
++			printf("SWEET CMD: batt chgr=%02x/%02x pp=%02x apsd=%02x/%02x icl_sts=%02x usbin=%02x icl_cfg=%02x (rc=%d)\n",
++			    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], rc);
++			continue;
++		}
+ 		if (strncmp(cmd, "panic", 5) == 0) {
+ 			/* Tests the panic path: backtraces must reach the persistent log. */
+ 			panic("SWEET CMD: panic requested over USB");
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 97d3890..d1488c0 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -122,6 +122,7 @@ static int sweet_fb_fade = 1;
+  */
+ extern "C" volatile uint32_t sweet_fb_display_on_count = 0;
+ extern "C" volatile uint32_t sweet_fb_display_off = 0;
++extern "C" void sweet_cpufreq_set_screen_off(int off);
+ 
+ class IOMobileFramebuffer : public IOService {
+ 	OSDeclareDefaultStructors(IOMobileFramebuffer);
+@@ -1569,6 +1570,7 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMetho
+ 			}
+ 			sweet_fb_display_off = off ? 1u : 0u;
+ 			IOLockUnlock(fFB->fLock);
++			sweet_cpufreq_set_screen_off(off ? 1 : 0);
+ 			if (!off) {
+ 				/* sweetbl=2: give CoreBrightness a backlight only once the display is up */
+ 				sweet_bl_publish(fFB, true);
